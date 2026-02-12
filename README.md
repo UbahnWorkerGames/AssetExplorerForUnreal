@@ -1,6 +1,6 @@
 # UnrealAssetExplorer
 
-UnrealAssetExplorer is a local asset management tool for Unreal Engine content packs.
+UnrealAssetExplorer is the management tool for Unreal Engine asset packs.
 It combines a FastAPI backend with a React frontend and adds workflows for:
 
 - project and asset indexing
@@ -9,6 +9,21 @@ It combines a FastAPI backend with a React frontend and adds workflows for:
 - LLM/OpenAI-assisted tag generation and translation
 - semantic search (embeddings)
 - import/export/sync flows for UE asset packs
+
+## Unreal Integration
+
+For Unreal-side interaction you need:
+
+- https://github.com/UbahnWorkerGames/UnrealAssetExplorerBridge
+
+The bridge is currently shipped for UE 5.7.
+
+Important:
+
+- the exporter needs UnrealAssetExplorer running during export
+- ports are configurable in both places:
+  - Unreal plugin settings
+  - UnrealAssetExplorer settings
 
 ## Tech Stack
 
