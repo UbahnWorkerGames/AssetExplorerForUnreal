@@ -7,7 +7,6 @@ venv/
 ENV/
 env/
 build/
-dist/
 *.egg-info/
 .pytest_cache/
 .tox/
