@@ -2927,7 +2927,7 @@ def _run_batch_translate_names(
                                 total,
                                 done,
                                 errors,
-                                message=f"Translate name-tags: {done}/{total} • chunk {chunk_idx}/{chunks_total}",
+                                message=f"Translate name-tags: {done}/{total} Ã¢â‚¬Â¢ chunk {chunk_idx}/{chunks_total}",
                             )
 
                 missing = len(chunk) - len(seen_ids)
@@ -2944,7 +2944,7 @@ def _run_batch_translate_names(
                                 total,
                                 done,
                                 errors,
-                                message=f"Translate name-tags: {done}/{total} • chunk {chunk_idx}/{chunks_total}",
+                                message=f"Translate name-tags: {done}/{total} Ã¢â‚¬Â¢ chunk {chunk_idx}/{chunks_total}",
                             )
                 if batch_rows:
                     _flush_tag_batch_chunked(batch_rows, settings)
@@ -3711,7 +3711,7 @@ def _run_batch_translate_tags(
                                 total,
                                 done,
                                 errors,
-                                message=f"Translate tags: {done}/{total} • chunk {chunk_idx}/{chunks_total}",
+                                message=f"Translate tags: {done}/{total} Ã¢â‚¬Â¢ chunk {chunk_idx}/{chunks_total}",
                             )
 
                 missing = len(chunk) - len(seen_ids)
@@ -3728,7 +3728,7 @@ def _run_batch_translate_tags(
                                 total,
                                 done,
                                 errors,
-                                message=f"Translate tags: {done}/{total} • chunk {chunk_idx}/{chunks_total}",
+                                message=f"Translate tags: {done}/{total} Ã¢â‚¬Â¢ chunk {chunk_idx}/{chunks_total}",
                             )
                 if batch_rows:
                     _flush_tag_batch_chunked(batch_rows, settings)
@@ -4671,7 +4671,7 @@ def _normalize_tags(tags: List[str]) -> List[str]:
         value = str(tag).strip().lower()
         if not value:
             continue
-        # Drop mojibake / invalid control chars (e.g. "weiã")
+        # Drop mojibake / invalid control chars (e.g. "weiÃƒÂ£Ã‚Å¸")
         if "\ufffd" in value or any(0x80 <= ord(ch) <= 0x9F for ch in value):
             continue
         if value not in cleaned:
@@ -5213,11 +5213,15 @@ def _resolve_ui_dist(settings: Dict[str, str]) -> Optional[Path]:
     env_path = os.getenv("ASSET_UI_DIST") or os.getenv("FRONTEND_DIST")
     if env_path:
         return Path(env_path).expanduser()
-    cfg_path = settings.get("frontend_dist_path") or ""
-    if cfg_path.strip():
-        return Path(cfg_path).expanduser()
-    return BASE_DIR / "frontend" / "dist"
 
+    cfg_path = (settings.get("frontend_dist_path") or "").strip()
+    if cfg_path:
+        p = Path(cfg_path).expanduser()
+        if not p.is_absolute():
+            p = (BASE_DIR / p).resolve()
+        return p
+
+    return BASE_DIR / "frontend" / "dist"
 
 def _open_browser(url: str) -> None:
     try:
@@ -5228,11 +5232,27 @@ def _open_browser(url: str) -> None:
 
 def _configure_frontend(settings: Dict[str, str]) -> None:
     global UI_ENABLED, UI_DIST_DIR
-    env_enabled = _bool_from_setting(os.getenv("ASSET_UI") or os.getenv("SERVE_FRONTEND"))
-    cfg_enabled = _bool_from_setting(settings.get("serve_frontend"))
-    enabled = env_enabled or cfg_enabled
+
+    raw_env = os.getenv("ASSET_UI")
+    if raw_env is None:
+        raw_env = os.getenv("SERVE_FRONTEND")
+    raw_cfg = settings.get("serve_frontend")
+
+    env_set = raw_env is not None and str(raw_env).strip() != ""
+    cfg_set = raw_cfg is not None and str(raw_cfg).strip() != ""
+
     dist_dir = _resolve_ui_dist(settings)
-    if enabled and dist_dir and dist_dir.is_dir():
+    dist_exists = bool(dist_dir and dist_dir.is_dir())
+
+    if env_set:
+        enabled = _bool_from_setting(raw_env)
+    elif cfg_set:
+        enabled = _bool_from_setting(raw_cfg)
+    else:
+        # Sensible default for runtime builds: if dist exists, serve it.
+        enabled = dist_exists
+
+    if enabled and dist_exists:
         UI_ENABLED = True
         UI_DIST_DIR = dist_dir
         app.mount("/ui", StaticFiles(directory=dist_dir, html=True), name="ui")
@@ -5240,7 +5260,14 @@ def _configure_frontend(settings: Dict[str, str]) -> None:
     else:
         UI_ENABLED = False
         UI_DIST_DIR = None
-
+        logger.info(
+            "UI disabled (enabled=%s dist=%s exists=%s env=%s cfg=%s)",
+            enabled,
+            dist_dir,
+            dist_exists,
+            raw_env,
+            raw_cfg,
+        )
 
 @app.on_event("startup")
 def startup() -> None:
@@ -8107,4 +8134,6 @@ def generate_project_setcard(project_id: int, force: bool = Query(False)) -> Dic
 def generate_project_previews(project_id: int) -> Dict[str, Any]:
     _queue_preview_generation(project_id)
     return {"status": "queued"}
+
+
 
