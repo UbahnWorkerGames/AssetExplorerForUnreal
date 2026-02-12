@@ -54,6 +54,7 @@ Important:
 - Prebuilt frontend `frontend/dist`
 
 Node is only required to build the frontend once.
+The frontend is pre-generated in this repo, so you can start directly with the Python runtime scripts.
 
 ## Quick Start
 
