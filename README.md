@@ -1,4 +1,4 @@
-# UnrealAssetExplorer
+# AssetExplorerForUnreal
 
 UnrealAssetExplorer is the management tool for Unreal Engine asset packs.
 It combines a FastAPI backend with a React frontend and adds workflows for:
