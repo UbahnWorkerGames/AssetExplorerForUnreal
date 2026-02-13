@@ -921,33 +921,33 @@ def _openai_batch_mark_processed(batch_id: str) -> None:
     _db_retry(_write)
 
 
-def _openai_list_pending_batches(flow: str, project_id: Optional[int]) -> List[Dict[str, Any]]:
+def _openai_list_pending_batches(flow: str, project_id: Optional[int], task_id: Optional[int] = None) -> List[Dict[str, Any]]:
     def _read() -> List[Dict[str, Any]]:
         conn = get_db()
+        where = [
+            "flow = ?",
+            "processed_at IS NULL",
+            "(status IS NULL OR status NOT IN ('failed', 'expired', 'cancelled'))",
+        ]
+        params: List[Any] = [flow]
         if project_id is None:
-            rows = fetch_all(
-                conn,
-                """
-                SELECT *
-                FROM openai_batches
-                WHERE flow = ? AND project_id IS NULL AND processed_at IS NULL
-                  AND (status IS NULL OR status NOT IN ('failed', 'expired', 'cancelled'))
-                ORDER BY id ASC
-                """,
-                (flow,),
-            )
+            where.append("project_id IS NULL")
         else:
-            rows = fetch_all(
-                conn,
-                """
-                SELECT *
-                FROM openai_batches
-                WHERE flow = ? AND project_id = ? AND processed_at IS NULL
-                  AND (status IS NULL OR status NOT IN ('failed', 'expired', 'cancelled'))
-                ORDER BY id ASC
-                """,
-                (flow, project_id),
-            )
+            where.append("project_id = ?")
+            params.append(project_id)
+        if task_id is not None:
+            where.append("task_id = ?")
+            params.append(int(task_id))
+        rows = fetch_all(
+            conn,
+            f"""
+            SELECT *
+            FROM openai_batches
+            WHERE {' AND '.join(where)}
+            ORDER BY id ASC
+            """,
+            tuple(params),
+        )
         conn.close()
         return rows
 
@@ -2149,7 +2149,7 @@ def _run_batch_tagging(
     client_timeout = httpx.Timeout(30.0, connect=30.0, read=30.0)
 
     submitted: List[Dict[str, Any]] = []
-    existing_pending = _openai_list_pending_batches(flow, project_id)
+    existing_pending = _openai_list_pending_batches(flow, project_id, task_id)
     if existing_pending:
         offset_seed = 0
         for row in existing_pending:
@@ -2275,11 +2275,13 @@ def _run_batch_tagging(
                     poll.raise_for_status()
                     payload = poll.json()
                 except httpx.HTTPError as exc:
-                    status_code = getattr(exc.response, "status_code", None)
-                    if status_code in {502, 503, 504}:
-                        logger.warning("OpenAI batch poll retryable error id=%s status=%s", batch_id, status_code)
+                    response = getattr(exc, "response", None)
+                    status_code = getattr(response, "status_code", None)
+                    if isinstance(exc, httpx.TimeoutException) or status_code in {502, 503, 504}:
+                        logger.warning("OpenAI batch poll retryable error id=%s status=%s err=%s", batch_id, status_code, exc)
                         continue
-                    raise
+                    logger.warning("OpenAI batch poll error id=%s status=%s err=%s", batch_id, status_code, exc)
+                    continue
 
                 status = payload.get("status") or ""
                 output_file_id = payload.get("output_file_id")
@@ -2380,10 +2382,10 @@ def _run_batch_tagging(
                                 total,
                                 done,
                                 errors,
-                                message=f"Archived batch output: {Path(archive_path).name}",
+                                message=f"Archived batch output (apply on restart): {Path(archive_path).name}",
                             )
                         if progress_hook is not None:
-                            progress_hook(0, 0, f"Archived batch output: {Path(archive_path).name}")
+                            progress_hook(0, 0, f"Archived batch output (apply on restart): {Path(archive_path).name}")
                         continue
 
                     batch_rows: List[Dict[str, Any]] = []
@@ -2615,7 +2617,7 @@ def _run_batch_translate_names(
     submitted: List[Dict[str, Any]] = []
     max_assets = _normalized_batch_size(settings.get("tag_batch_max_assets"))
     chunks_total = max(1, (len(requests) + max_assets - 1) // max_assets)
-    existing_pending = _openai_list_pending_batches(flow, project_id)
+    existing_pending = _openai_list_pending_batches(flow, project_id, task_id)
     if existing_pending:
         for idx, row in enumerate(existing_pending, start=1):
             req_count = int(row.get("request_total") or 0)
@@ -2728,8 +2730,9 @@ def _run_batch_translate_names(
                     poll.raise_for_status()
                     payload = poll.json()
                 except httpx.HTTPError as exc:
-                    status_code = getattr(exc.response, "status_code", None)
-                    if status_code in {502, 503, 504}:
+                    response = getattr(exc, "response", None)
+                    status_code = getattr(response, "status_code", None)
+                    if isinstance(exc, httpx.TimeoutException) or status_code in {502, 503, 504}:
                         logger.warning(
                             "OpenAI translate-name poll retryable error id=%s status=%s",
                             batch_id,
@@ -2862,7 +2865,7 @@ def _run_batch_translate_names(
                             total,
                             done,
                             errors,
-                            message=f"Archived batch output: {Path(archive_path).name}",
+                            message=f"Archived batch output (apply on restart): {Path(archive_path).name}",
                         )
                     continue
 
@@ -3458,7 +3461,7 @@ def _run_batch_translate_tags(
     submitted: List[Dict[str, Any]] = []
     max_assets = _normalized_batch_size(settings.get("tag_batch_max_assets"))
     chunks_total = max(1, (len(requests) + max_assets - 1) // max_assets)
-    existing_pending = _openai_list_pending_batches(flow, project_id)
+    existing_pending = _openai_list_pending_batches(flow, project_id, task_id)
     if existing_pending:
         for idx, row in enumerate(existing_pending, start=1):
             req_count = int(row.get("request_total") or 0)
@@ -3562,8 +3565,9 @@ def _run_batch_translate_tags(
                     poll.raise_for_status()
                     payload = poll.json()
                 except httpx.HTTPError as exc:
-                    status_code = getattr(exc.response, "status_code", None)
-                    if status_code in {502, 503, 504}:
+                    response = getattr(exc, "response", None)
+                    status_code = getattr(response, "status_code", None)
+                    if isinstance(exc, httpx.TimeoutException) or status_code in {502, 503, 504}:
                         logger.warning(
                             "OpenAI translate-tags poll retryable error id=%s status=%s",
                             batch_id,
@@ -3646,7 +3650,7 @@ def _run_batch_translate_tags(
                             total,
                             done,
                             errors,
-                            message=f"Archived batch output: {Path(archive_path).name}",
+                            message=f"Archived batch output (apply on restart): {Path(archive_path).name}",
                         )
                     continue
 
@@ -3781,16 +3785,7 @@ def _translate_tags_only(
     settings = get_settings(settings_conn)
     settings_conn.close()
     if only_missing:
-        target_language = (settings.get("tag_language") or "").strip()
-        filtered_rows: List[Dict[str, Any]] = []
-        for row in rows:
-            if not row.get("translate_tags_done_at"):
-                filtered_rows.append(row)
-                continue
-            row_language = (row.get("translated_language") or "").strip()
-            if target_language and row_language.lower() != target_language.lower():
-                filtered_rows.append(row)
-        rows = filtered_rows
+        rows = [row for row in rows if not row.get("translate_tags_done_at")]
     total = len(rows)
     done = 0
     errors = 0
@@ -3887,6 +3882,71 @@ def _tag_all_projects(mode: str, task_id: Optional[int] = None) -> None:
     except (TypeError, ValueError):
         max_workers = 3
     if mode == "missing":
+        provider = (settings.get("provider") or "").strip().lower()
+        use_batch_mode = _bool_from_setting(settings.get("tag_use_batch_mode"))
+        if use_batch_mode and provider in {"openai", "groq"}:
+            conn = get_db()
+            all_rows = fetch_all(
+                conn,
+                "SELECT a.id, a.project_id, a.name, a.description, a.tags_json, a.type, a.asset_dir, "
+                "a.detail_image, a.full_image, a.thumb_image, a.anim_detail, a.anim_thumb, "
+                "a.hash_main_blake3, a.hash_full_blake3, a.created_at, t.tags_done_at "
+                "FROM assets a LEFT JOIN asset_tags t ON t.hash_full_blake3 = a.hash_full_blake3",
+            )
+            conn.close()
+
+            include_types = set(_parse_type_filter(settings.get("tag_include_types")))
+            exclude_types = set(_parse_type_filter(settings.get("tag_exclude_types")))
+            if include_types or exclude_types:
+                filtered = []
+                for row in all_rows:
+                    asset_type = (row.get("type") or "").strip().lower()
+                    if include_types and asset_type not in include_types:
+                        continue
+                    if exclude_types and asset_type in exclude_types:
+                        continue
+                    filtered.append(row)
+                all_rows = filtered
+
+            try:
+                missing_min_tags = int(settings.get("tag_missing_min_tags") or 1)
+            except (TypeError, ValueError):
+                missing_min_tags = 1
+            if missing_min_tags < 1:
+                missing_min_tags = 1
+            candidates = [row for row in all_rows if _count_tags_json(row.get("tags_json")) < missing_min_tags]
+
+            try:
+                image_size = int(settings.get("tag_image_size") or "512")
+            except ValueError:
+                image_size = 512
+            try:
+                image_quality = int(settings.get("tag_image_quality") or "80")
+            except ValueError:
+                image_quality = 80
+
+            if task_id is not None:
+                total_candidates = len(candidates)
+                _task_progress(
+                    task_id,
+                    "running",
+                    total_candidates,
+                    0,
+                    0,
+                    message=f"Tag missing all: 0/{total_candidates}",
+                )
+
+            _run_batch_tagging(
+                project_id=None,
+                candidates=candidates,
+                settings=settings,
+                mode=mode,
+                image_size=image_size,
+                image_quality=image_quality,
+                provider=provider,
+                task_id=task_id,
+            )
+            return
         max_workers = 1
     if max_workers <= 0:
         max_workers = 1
@@ -3976,6 +4036,13 @@ def _tag_project_assets(
                 continue
             filtered.append(row)
         rows = filtered
+
+    try:
+        missing_min_tags = int(settings.get("tag_missing_min_tags") or 1)
+    except (TypeError, ValueError):
+        missing_min_tags = 1
+    if missing_min_tags < 1:
+        missing_min_tags = 1
 
     if mode == "missing":
         candidates = [row for row in rows if not row.get("tags_done_at")]
@@ -6013,7 +6080,22 @@ def open_project_folder(project_id: int, target: str = Query("auto")) -> Dict[st
     if target == "project":
         return open_project()
 
-    # auto: prefer project if Content has any files, else source
+    # auto: prefer whichever side is larger (after size refresh), then fallback.
+    try:
+        project_size = int(project.get("size_bytes") or 0)
+    except Exception:
+        project_size = 0
+    try:
+        source_size = int(project.get("source_size_bytes") or 0)
+    except Exception:
+        source_size = 0
+
+    if project_size > 0 or source_size > 0:
+        if project_size >= source_size:
+            return open_project()
+        return open_source()
+
+    # Fallback if size fields are not available yet.
     folder_path = project.get("folder_path") or ""
     content_dir = Path(folder_path) / "Content" if folder_path else None
     if content_dir and content_dir.exists():
@@ -6911,6 +6993,23 @@ def _parse_csv_list(value: Optional[str]) -> List[str]:
     if not value:
         return []
     return [t.strip() for t in str(value).split(",") if t.strip()]
+
+
+def _count_tags_json(raw_tags: Any) -> int:
+    if raw_tags is None:
+        return 0
+    if isinstance(raw_tags, list):
+        return len([str(tag).strip() for tag in raw_tags if str(tag).strip()])
+    text = str(raw_tags).strip()
+    if not text:
+        return 0
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return 0
+    if not isinstance(parsed, list):
+        return 0
+    return len([str(tag).strip() for tag in parsed if str(tag).strip()])
 
 
 def _resolve_hash_column(hash_type: str) -> str:

@@ -1828,7 +1828,7 @@ export default function App() {
     if (!window.confirm(confirmMessage)) return;
     try {
       await tagMissingAllProjects();
-      toast.info("Tagging missing assets for all projects... Embeddings are not generated. Use Rebuild semantic if needed.");
+      toast.info("Tagging missing assets for all projects... Batch results are downloaded now and applied on next restart.");
     } catch (err) {
       toast.error(`Tag missing failed: ${err.message || "unknown error"}`);
     }
@@ -1837,7 +1837,7 @@ export default function App() {
     if (!window.confirm("Translate asset names to tags (LLM) for all projects?")) return;
     try {
       await translateAllNameTags();
-      toast.info("Translating asset names to tags (all projects)...");
+      toast.info("Translating asset names to tags (all projects)... Batch results are downloaded now and applied on next restart.");
     } catch (err) {
       toast.error(`Translate names failed: ${err.message || "unknown error"}`);
     }
@@ -1846,7 +1846,7 @@ export default function App() {
     if (!window.confirm("Translate asset names to tags (LLM) only for assets not processed yet?")) return;
     try {
       await translateAllNameTagsMissing();
-      toast.info("Translating missing asset names to tags (all projects)...");
+      toast.info("Translating missing asset names to tags (all projects)... Batch results are downloaded now and applied on next restart.");
     } catch (err) {
       toast.error(`Translate names missing failed: ${err.message || "unknown error"}`);
     }
@@ -1855,7 +1855,7 @@ export default function App() {
     if (!window.confirm("Generate tags from asset names for all projects? (no translation)")) return;
     try {
       await nameTagsAllSimple();
-      toast.info("Generating tags from names (all projects)...");
+      toast.info("Generating tags from names (all projects)... Batch results are downloaded now and applied on next restart.");
     } catch (err) {
       toast.error(`Name->tags failed: ${err.message || "unknown error"}`);
     }
@@ -1864,7 +1864,7 @@ export default function App() {
     if (!window.confirm("Generate tags from names only for assets with too few tags?")) return;
     try {
       await nameTagsAllSimpleMissing();
-      toast.info("Generating missing name-based tags (all projects)...");
+      toast.info("Generating missing name-based tags (all projects)... Batch results are downloaded now and applied on next restart.");
     } catch (err) {
       toast.error(`Name->tags missing failed: ${err.message || "unknown error"}`);
     }
@@ -1873,7 +1873,7 @@ export default function App() {
     if (!window.confirm("Translate existing tags for all projects (LLM)?")) return;
     try {
       await translateAllTags();
-      toast.info("Translating existing tags (all projects)...");
+      toast.info("Translating existing tags (all projects)... Batch results are downloaded now and applied on next restart.");
     } catch (err) {
       toast.error(`Translate tags failed: ${err.message || "unknown error"}`);
     }
@@ -1882,7 +1882,7 @@ export default function App() {
     if (!window.confirm("Translate tags only for assets without translated tags?")) return;
     try {
       await translateAllTagsMissing();
-      toast.info("Translating missing tags (all projects)...");
+      toast.info("Translating missing tags (all projects)... Batch results are downloaded now and applied on next restart.");
     } catch (err) {
       toast.error(`Translate tags missing failed: ${err.message || "unknown error"}`);
     }
