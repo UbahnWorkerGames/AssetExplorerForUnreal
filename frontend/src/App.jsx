@@ -2249,6 +2249,19 @@ export default function App() {
       toast.error("Project delete failed");
     }
   }
+  async function handleSetSourcePreference(projectId, preference) {
+    const pref = preference === "internal" ? "internal" : "external";
+    try {
+      await updateProject(projectId, { source_preference: pref });
+      setProjects((prev) =>
+        prev.map((project) => (project.id === projectId ? { ...project, source_preference: pref } : project))
+      );
+      toast.info(`Source set to ${pref}`);
+    } catch (err) {
+      console.error(err);
+      toast.error(`Source switch failed: ${err.message || "unknown error"}`);
+    }
+  }
   async function handleOpenProject(project) {
     toast.info("Opening folder...");
     try {
@@ -3907,15 +3920,37 @@ function formatSizeGb(bytes) {
                               <div className="project-meta">
                                 <span className="project-meta-label">Storage</span>
                                 <span className="project-meta-value">
-                                  {project.reimported_once ? (
-                                    <span title="Local: sync has been executed at least once." aria-label="Local">
+                                  {(project.source_preference || "external").toLowerCase() === "internal" ? (
+                                    <span title="Internal source: project directory is preferred." aria-label="Internal">
                                       <FontAwesomeIcon icon={faHardDrive} /> Local
                                     </span>
                                   ) : (
-                                    <span title="External: uses source directory until the first sync." aria-label="External">
+                                    <span title="External source: original source directory is preferred." aria-label="External">
                                       <FontAwesomeIcon icon={faFolderOpen} /> External
                                     </span>
                                   )}
+                                </span>
+                              </div>
+                              <div className="project-meta">
+                                <span className="project-meta-label">Source mode</span>
+                                <span className="project-meta-value">
+                                  <button
+                                    className={`btn btn-outline-dark btn-xs ${((project.source_preference || "external").toLowerCase() === "external") ? "active" : ""}`}
+                                    type="button"
+                                    title="Prefer external source path for export/open source decisions."
+                                    onClick={() => handleSetSourcePreference(project.id, "external")}
+                                  >
+                                    External
+                                  </button>
+                                  {" "}
+                                  <button
+                                    className={`btn btn-outline-dark btn-xs ${((project.source_preference || "external").toLowerCase() === "internal") ? "active" : ""}`}
+                                    type="button"
+                                    title="Prefer internal project directory for export/open source decisions."
+                                    onClick={() => handleSetSourcePreference(project.id, "internal")}
+                                  >
+                                    Internal
+                                  </button>
                                 </span>
                               </div>
                               {projectStats[project.id]?.types &&
@@ -4316,7 +4351,7 @@ function formatSizeGb(bytes) {
           <section className="panel">
             <form className="settings-form" onSubmit={handleSaveSettings}>
               <div className="settings-save-floating">
-                <button className="btn btn-primary" type="submit">
+                <button className="btn btn-primary" type="submit" title="Save all current settings to the database.">
                   Save settings
                 </button>
               </div>
@@ -4333,6 +4368,7 @@ function formatSizeGb(bytes) {
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, skip_export_if_on_server: e.target.checked }))
                         }
+                        title="Skip exporting an asset if it already exists on the target server."
                         id="skipExportIfOnServer"
                       />
                       <label className="form-check-label" htmlFor="skipExportIfOnServer">
@@ -4349,6 +4385,7 @@ function formatSizeGb(bytes) {
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, export_overwrite_zips: e.target.checked }))
                         }
+                        title="Allow export to overwrite existing ZIP files."
                         id="exportOverwriteZips"
                       />
                       <label className="form-check-label" htmlFor="exportOverwriteZips">
@@ -4365,6 +4402,7 @@ function formatSizeGb(bytes) {
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, export_upload_after_export: e.target.checked }))
                         }
+                        title="Automatically upload exported assets after export completes."
                         id="exportUploadAfter"
                       />
                       <label className="form-check-label" htmlFor="exportUploadAfter">
@@ -4381,6 +4419,7 @@ function formatSizeGb(bytes) {
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, generate_embeddings_on_import: e.target.checked }))
                         }
+                        title="Generate semantic embeddings automatically during import."
                         id="generateEmbeddingsOnImport"
                       />
                       <label className="form-check-label" htmlFor="generateEmbeddingsOnImport">
@@ -4397,6 +4436,7 @@ function formatSizeGb(bytes) {
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, default_full_project_copy: e.target.checked }))
                         }
+                        title="Default new projects to copy the full project instead of component-only."
                         id="defaultFullProjectCopy"
                       />
                       <label className="form-check-label" htmlFor="defaultFullProjectCopy">
@@ -4413,6 +4453,7 @@ function formatSizeGb(bytes) {
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, tag_display_limit: e.target.checked ? 5 : 0 }))
                         }
+                        title="Display only the top 5 tags in UI lists (data is unchanged)."
                         id="tagDisplayLimit"
                       />
                       <label className="form-check-label" htmlFor="tagDisplayLimit">
@@ -4430,6 +4471,7 @@ function formatSizeGb(bytes) {
                         max="520"
                         step="10"
                         value={settings.sidebar_width ?? 280}
+                        title="Set left sidebar width in pixels."
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, sidebar_width: Number(e.target.value) }))
                         }
@@ -4446,6 +4488,7 @@ function formatSizeGb(bytes) {
                         max="200"
                         step="5"
                         value={settings.project_name_wrap_chars ?? 90}
+                        title="Maximum project name length before wrapping in sidebar."
                         onChange={(e) =>
                           setSettings((prev) => ({
                             ...prev,
@@ -4461,6 +4504,7 @@ function formatSizeGb(bytes) {
                       <input
                         className="form-control"
                         placeholder="UnrealEditor-Cmd path"
+                        title="Absolute path to UnrealEditor-Cmd executable."
                         value={settings.ue_cmd_path || "I:/epic/UE_5.7/Engine/Binaries/Win64/UnrealEditor-Cmd.exe"}
                         onChange={(e) => setSettings((prev) => ({ ...prev, ue_cmd_path: e.target.value }))}
                       />
@@ -4472,6 +4516,7 @@ function formatSizeGb(bytes) {
                       <input
                         className="form-control"
                         placeholder="http://127.0.0.1:9090"
+                        title="Base URL of the Unreal listener/import bridge service."
                         value={settings.import_base_url || ""}
                         onChange={(e) => setSettings((prev) => ({ ...prev, import_base_url: e.target.value }))}
                       />
@@ -4490,6 +4535,7 @@ function formatSizeGb(bytes) {
                       type="number"
                       min="0"
                       max="20"
+                      title="Ignore this number of initial capture frames."
                       value={settings.export_capture360_discard_frames ?? 2}
                       onChange={(e) =>
                         setSettings((prev) => ({ ...prev, export_capture360_discard_frames: Number(e.target.value) }))
@@ -4503,6 +4549,7 @@ function formatSizeGb(bytes) {
                       type="number"
                       min="1"
                       max="24"
+                      title="Default number of generated preview images per asset."
                       value={settings.export_default_image_count ?? 1}
                       onChange={(e) =>
                         setSettings((prev) => ({ ...prev, export_default_image_count: Number(e.target.value) }))
@@ -4516,6 +4563,7 @@ function formatSizeGb(bytes) {
                       type="number"
                       min="1"
                       max="24"
+                      title="Preview image count override for StaticMesh assets."
                       value={settings.export_static_mesh_image_count ?? ""}
                       onChange={(e) =>
                         setSettings((prev) => ({ ...prev, export_static_mesh_image_count: e.target.value }))
@@ -4529,6 +4577,7 @@ function formatSizeGb(bytes) {
                       type="number"
                       min="1"
                       max="24"
+                      title="Preview image count override for SkeletalMesh assets."
                       value={settings.export_skeletal_mesh_image_count ?? ""}
                       onChange={(e) =>
                         setSettings((prev) => ({ ...prev, export_skeletal_mesh_image_count: e.target.value }))
@@ -4542,6 +4591,7 @@ function formatSizeGb(bytes) {
                       type="number"
                       min="1"
                       max="24"
+                      title="Preview image count override for Material assets."
                       value={settings.export_material_image_count ?? ""}
                       onChange={(e) =>
                         setSettings((prev) => ({ ...prev, export_material_image_count: e.target.value }))
@@ -4555,6 +4605,7 @@ function formatSizeGb(bytes) {
                       type="number"
                       min="1"
                       max="24"
+                      title="Preview image count override for Blueprint assets."
                       value={settings.export_blueprint_image_count ?? ""}
                       onChange={(e) =>
                         setSettings((prev) => ({ ...prev, export_blueprint_image_count: e.target.value }))
@@ -4568,6 +4619,7 @@ function formatSizeGb(bytes) {
                       type="number"
                       min="1"
                       max="24"
+                      title="Preview image count override for Niagara assets."
                       value={settings.export_niagara_image_count ?? ""}
                       onChange={(e) =>
                         setSettings((prev) => ({ ...prev, export_niagara_image_count: e.target.value }))
@@ -4581,6 +4633,7 @@ function formatSizeGb(bytes) {
                       type="number"
                       min="1"
                       max="24"
+                      title="Preview image count override for AnimSequence assets."
                       value={settings.export_anim_sequence_image_count ?? ""}
                       onChange={(e) =>
                         setSettings((prev) => ({ ...prev, export_anim_sequence_image_count: e.target.value }))
@@ -4595,6 +4648,7 @@ function formatSizeGb(bytes) {
                       min="30"
                       max="95"
                       step="1"
+                      title="JPEG/WebP quality used for tag-image preprocessing."
                       value={settings.tag_image_quality ?? 80}
                       onChange={(e) =>
                         setSettings((prev) => ({ ...prev, tag_image_quality: Number(e.target.value) }))
@@ -4608,6 +4662,7 @@ function formatSizeGb(bytes) {
                       type="number"
                       min="1"
                       step="1"
+                      title="Minimum tag count threshold used by 'missing' workflows."
                       value={settings.tag_missing_min_tags ?? 1}
                       onChange={(e) =>
                         setSettings((prev) => ({ ...prev, tag_missing_min_tags: e.target.value }))
@@ -4631,6 +4686,7 @@ function formatSizeGb(bytes) {
                       <button
                         className="btn btn-outline-dark btn-xs provider-activate"
                         type="button"
+                        title="Set OpenAI as active LLM provider."
                         onClick={() => handleProviderChange("openai")}
                       >
                         Set active
@@ -4643,6 +4699,7 @@ function formatSizeGb(bytes) {
                       <input
                         className="form-control"
                         placeholder="Base URL"
+                        title="Base URL for this provider API endpoint."
                         value={settings.openai_base_url || ""}
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, openai_base_url: e.target.value }))
@@ -4651,6 +4708,7 @@ function formatSizeGb(bytes) {
                       <input
                         className="form-control"
                         placeholder="Model"
+                        title="Primary model name used for tagging."
                         value={settings.openai_model || ""}
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, openai_model: e.target.value }))
@@ -4659,6 +4717,7 @@ function formatSizeGb(bytes) {
                       <input
                         className="form-control"
                         placeholder="Translation model"
+                        title="Model name used for tag translation."
                         value={settings.openai_translate_model || ""}
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, openai_translate_model: e.target.value }))
@@ -4667,6 +4726,7 @@ function formatSizeGb(bytes) {
                       <input
                         className="form-control"
                         placeholder="API key"
+                        title="API key for this provider. Stored securely in settings."
                         value={openaiKeyInput}
                         onChange={(e) => setOpenaiKeyInput(e.target.value)}
                       />
@@ -4675,6 +4735,7 @@ function formatSizeGb(bytes) {
                         <textarea
                           className="form-control"
                           rows="4"
+                          title="Prompt template used for tag generation requests."
                           value={settings.tag_prompt_template_openai ?? DEFAULT_TAG_PROMPT}
                           onChange={(e) =>
                             setSettings((prev) => ({ ...prev, tag_prompt_template_openai: e.target.value }))
@@ -4683,6 +4744,7 @@ function formatSizeGb(bytes) {
                         <button
                           className="btn btn-outline-dark btn-sm"
                           type="button"
+                          title="Reset tag prompt template to default."
                           onClick={() =>
                             setSettings((prev) => ({
                               ...prev,
@@ -4699,11 +4761,13 @@ function formatSizeGb(bytes) {
                           className="form-control llm-test-file"
                           type="file"
                           accept="image/*"
+                          title="Select an image to run a quick LLM tag test."
                           onChange={(e) => setLlmTestImage(e.target.files?.[0] || null)}
                         />
                         <button
                           className="btn btn-outline-dark btn-sm"
                           type="button"
+                          title="Run a live test request with the current provider settings."
                           onClick={handleTestLlmTags}
                         >
                           Test image
@@ -4761,6 +4825,7 @@ function formatSizeGb(bytes) {
                       <button
                         className="btn btn-outline-dark btn-xs provider-activate"
                         type="button"
+                        title="Set OpenRouter as active LLM provider."
                         onClick={() => handleProviderChange("openrouter")}
                       >
                         Set active
@@ -4773,6 +4838,7 @@ function formatSizeGb(bytes) {
                       <input
                         className="form-control"
                         placeholder="Base URL"
+                        title="Base URL for this provider API endpoint."
                         value={settings.openrouter_base_url || ""}
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, openrouter_base_url: e.target.value }))
@@ -4781,6 +4847,7 @@ function formatSizeGb(bytes) {
                       <input
                         className="form-control"
                         placeholder="Model"
+                        title="Primary model name used for tagging."
                         value={settings.openrouter_model || ""}
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, openrouter_model: e.target.value }))
@@ -4789,6 +4856,7 @@ function formatSizeGb(bytes) {
                       <input
                         className="form-control"
                         placeholder="Translation model"
+                        title="Model name used for tag translation."
                         value={settings.openrouter_translate_model || ""}
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, openrouter_translate_model: e.target.value }))
@@ -4797,6 +4865,7 @@ function formatSizeGb(bytes) {
                       <input
                         className="form-control"
                         placeholder="API key"
+                        title="API key for this provider. Stored securely in settings."
                         value={openrouterKeyInput}
                         onChange={(e) => setOpenrouterKeyInput(e.target.value)}
                       />
@@ -4805,6 +4874,7 @@ function formatSizeGb(bytes) {
                         <textarea
                           className="form-control"
                           rows="4"
+                          title="Prompt template used for tag generation requests."
                           value={settings.tag_prompt_template_openrouter ?? DEFAULT_TAG_PROMPT}
                           onChange={(e) =>
                             setSettings((prev) => ({ ...prev, tag_prompt_template_openrouter: e.target.value }))
@@ -4813,6 +4883,7 @@ function formatSizeGb(bytes) {
                         <button
                           className="btn btn-outline-dark btn-sm"
                           type="button"
+                          title="Reset tag prompt template to default."
                           onClick={() =>
                             setSettings((prev) => ({
                               ...prev,
@@ -4828,11 +4899,13 @@ function formatSizeGb(bytes) {
                           className="form-control llm-test-file"
                           type="file"
                           accept="image/*"
+                          title="Select an image to run a quick LLM tag test."
                           onChange={(e) => setLlmTestImage(e.target.files?.[0] || null)}
                         />
                         <button
                           className="btn btn-outline-dark btn-sm"
                           type="button"
+                          title="Run a live test request with the current provider settings."
                           onClick={handleTestLlmTags}
                         >
                           Test image
@@ -4891,6 +4964,7 @@ function formatSizeGb(bytes) {
                       <button
                         className="btn btn-outline-dark btn-xs provider-activate"
                         type="button"
+                        title="Set Groq as active LLM provider."
                         onClick={() => handleProviderChange("groq")}
                       >
                         Set active
@@ -4903,6 +4977,7 @@ function formatSizeGb(bytes) {
                       <input
                         className="form-control"
                         placeholder="Base URL"
+                        title="Base URL for this provider API endpoint."
                         value={settings.groq_base_url || ""}
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, groq_base_url: e.target.value }))
@@ -4911,12 +4986,14 @@ function formatSizeGb(bytes) {
                       <input
                         className="form-control"
                         placeholder="Model"
+                        title="Primary model name used for tagging."
                         value={settings.groq_model || ""}
                         onChange={(e) => setSettings((prev) => ({ ...prev, groq_model: e.target.value }))}
                       />
                       <input
                         className="form-control"
                         placeholder="API key"
+                        title="API key for this provider. Stored securely in settings."
                         value={groqKeyInput}
                         onChange={(e) => setGroqKeyInput(e.target.value)}
                       />
@@ -4925,6 +5002,7 @@ function formatSizeGb(bytes) {
                         <textarea
                           className="form-control"
                           rows="4"
+                          title="Prompt template used for tag generation requests."
                           value={settings.tag_prompt_template_groq ?? DEFAULT_TAG_PROMPT}
                           onChange={(e) =>
                             setSettings((prev) => ({ ...prev, tag_prompt_template_groq: e.target.value }))
@@ -4933,6 +5011,7 @@ function formatSizeGb(bytes) {
                         <button
                           className="btn btn-outline-dark btn-sm"
                           type="button"
+                          title="Reset tag prompt template to default."
                           onClick={() =>
                             setSettings((prev) => ({
                               ...prev,
@@ -4948,11 +5027,13 @@ function formatSizeGb(bytes) {
                           className="form-control llm-test-file"
                           type="file"
                           accept="image/*"
+                          title="Select an image to run a quick LLM tag test."
                           onChange={(e) => setLlmTestImage(e.target.files?.[0] || null)}
                         />
                         <button
                           className="btn btn-outline-dark btn-sm"
                           type="button"
+                          title="Run a live test request with the current provider settings."
                           onClick={handleTestLlmTags}
                         >
                           Test image
@@ -5010,6 +5091,7 @@ function formatSizeGb(bytes) {
                       <button
                         className="btn btn-outline-dark btn-xs provider-activate"
                         type="button"
+                        title="Set Ollama as active LLM provider."
                         onClick={() => handleProviderChange("ollama")}
                       >
                         Set active
@@ -5021,6 +5103,7 @@ function formatSizeGb(bytes) {
                       <input
                         className="form-control"
                         placeholder="Base URL"
+                        title="Base URL for this provider API endpoint."
                         value={settings.ollama_base_url || ""}
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, ollama_base_url: e.target.value }))
@@ -5029,6 +5112,7 @@ function formatSizeGb(bytes) {
                       <input
                         className="form-control"
                         placeholder="Model"
+                        title="Primary model name used for tagging."
                         value={settings.ollama_model || ""}
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, ollama_model: e.target.value }))
@@ -5037,6 +5121,7 @@ function formatSizeGb(bytes) {
                       <input
                         className="form-control"
                         placeholder="Translation model"
+                        title="Model name used for tag translation."
                         value={settings.ollama_translate_model || ""}
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, ollama_translate_model: e.target.value }))
@@ -5047,6 +5132,7 @@ function formatSizeGb(bytes) {
                         <textarea
                           className="form-control"
                           rows="4"
+                          title="Prompt template used for tag generation requests."
                           value={settings.tag_prompt_template_ollama ?? DEFAULT_TAG_PROMPT}
                           onChange={(e) =>
                             setSettings((prev) => ({ ...prev, tag_prompt_template_ollama: e.target.value }))
@@ -5055,6 +5141,7 @@ function formatSizeGb(bytes) {
                         <button
                           className="btn btn-outline-dark btn-sm"
                           type="button"
+                          title="Reset tag prompt template to default."
                           onClick={() =>
                             setSettings((prev) => ({
                               ...prev,
@@ -5070,11 +5157,13 @@ function formatSizeGb(bytes) {
                           className="form-control llm-test-file"
                           type="file"
                           accept="image/*"
+                          title="Select an image to run a quick LLM tag test."
                           onChange={(e) => setLlmTestImage(e.target.files?.[0] || null)}
                         />
                         <button
                           className="btn btn-outline-dark btn-sm"
                           type="button"
+                          title="Run a live test request with the current provider settings."
                           onClick={handleTestLlmTags}
                         >
                           Test image
@@ -5119,7 +5208,7 @@ function formatSizeGb(bytes) {
                 </div>
               </div>
               <div className="settings-row">
-                <button className="btn btn-outline-dark btn-sm btn-white-text" type="button" onClick={handleRegenerateEmbeddingsAll}>
+                <button className="btn btn-outline-dark btn-sm btn-white-text" type="button" title="Queue rebuild of all semantic embeddings (applies on next restart)." onClick={handleRegenerateEmbeddingsAll}>
                   Rebuild embeddings (all)
                 </button>
               </div>
@@ -5135,6 +5224,7 @@ function formatSizeGb(bytes) {
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, tag_use_batch_mode: e.target.checked }))
                         }
+                        title="Enable provider batch mode for OpenAI/Groq tag jobs."
                         id="tagBatchMode"
                       />
                       <label className="form-check-label batch-mode-label" htmlFor="tagBatchMode">
@@ -5152,6 +5242,7 @@ function formatSizeGb(bytes) {
                         max="50000"
                         step="1"
                         value={settings.tag_batch_max_assets ?? 500}
+                        title="Maximum assets sent per batch file."
                         onChange={(e) =>
                           setSettings((prev) => ({
                             ...prev,
@@ -5172,6 +5263,7 @@ function formatSizeGb(bytes) {
                         max="10"
                         step="1"
                         value={settings.tag_batch_project_concurrency ?? 3}
+                        title="How many projects can run batch jobs in parallel."
                         onChange={(e) =>
                           setSettings((prev) => ({
                             ...prev,
@@ -5189,6 +5281,7 @@ function formatSizeGb(bytes) {
                       <label className="form-label">Tag language</label>
                       <select
                         className="form-select"
+                        title="Target language for translated tags."
                         value={settings.tag_language || "english"}
                         onChange={(e) => setSettings((prev) => ({ ...prev, tag_language: e.target.value }))}
                       >
@@ -5209,6 +5302,7 @@ function formatSizeGb(bytes) {
                         max="2048"
                         step="32"
                         placeholder="Tag image size (px)"
+                        title="Resize images to this size before sending to LLM."
                         value={settings.tag_image_size ?? 512}
                         onChange={(e) => setSettings((prev) => ({ ...prev, tag_image_size: Number(e.target.value) }))}
                       />
@@ -5222,6 +5316,7 @@ function formatSizeGb(bytes) {
                         type="number"
                         min="0"
                         step="0.1"
+                        title="Minimum delay between LLM requests in seconds."
                         value={settings.llm_min_interval_seconds ?? 0}
                         onChange={(e) =>
                           setSettings((prev) => ({
@@ -5239,6 +5334,7 @@ function formatSizeGb(bytes) {
                           className="form-check-input"
                           type="checkbox"
                           checked={Boolean(settings.use_temperature)}
+                          title="Enable explicit temperature control for LLM sampling."
                           onChange={(e) => setSettings((prev) => ({ ...prev, use_temperature: e.target.checked }))}
                         />
                         <span className="form-check-label">Use temperature</span>
@@ -5250,6 +5346,7 @@ function formatSizeGb(bytes) {
                         max="2"
                         step="0.1"
                         placeholder="Temperature (0-2)"
+                        title="Sampling temperature (0 = deterministic, higher = more varied)."
                         value={settings.temperature ?? 1}
                         onChange={(e) => setSettings((prev) => ({ ...prev, temperature: Number(e.target.value) }))}
                         disabled={!settings.use_temperature}
@@ -5274,6 +5371,7 @@ function formatSizeGb(bytes) {
                       <label key={`settings-include-${assetType}`} className="filter-item">
                         <input
                           type="checkbox"
+                          title="Include this asset type in tag generation."
                           checked={settingsTagIncludeTypes.includes(assetType)}
                           onChange={() =>
                             toggleTypeList(
@@ -5297,6 +5395,7 @@ function formatSizeGb(bytes) {
                       <label key={`settings-exclude-${assetType}`} className="filter-item">
                         <input
                           type="checkbox"
+                          title="Exclude this asset type from tag generation."
                           checked={settingsTagExcludeTypes.includes(assetType)}
                           onChange={() =>
                             toggleTypeList(
@@ -5323,6 +5422,7 @@ function formatSizeGb(bytes) {
                       <label key={`settings-export-include-${assetType}`} className="filter-item">
                         <input
                           type="checkbox"
+                          title="Include this asset type in export operations."
                           checked={settingsExportIncludeTypes.includes(assetType)}
                           onChange={() =>
                             toggleTypeList(
@@ -5346,6 +5446,7 @@ function formatSizeGb(bytes) {
                       <label key={`settings-export-exclude-${assetType}`} className="filter-item">
                         <input
                           type="checkbox"
+                          title="Exclude this asset type from export operations."
                           checked={settingsExportExcludeTypes.includes(assetType)}
                           onChange={() =>
                             toggleTypeList(
@@ -5364,7 +5465,7 @@ function formatSizeGb(bytes) {
                   </div>
                 </div>
               </div>
-            <button className="btn btn-primary" type="submit">
+            <button className="btn btn-primary" type="submit" title="Save all current settings to the database.">
               Save settings
             </button>
             <p className="settings-note">
@@ -5380,6 +5481,7 @@ function formatSizeGb(bytes) {
                     <label className="form-label">Export hash</label>
                     <select
                       className="form-select"
+                      title="Hash column used for CSV export matching."
                       value={tagExportHash}
                       onChange={(e) => setTagExportHash(e.target.value)}
                     >
@@ -5391,6 +5493,7 @@ function formatSizeGb(bytes) {
                     <label className="form-label">Export project (optional)</label>
                     <select
                       className="form-select"
+                      title="Limit CSV export to one project, or export all projects."
                       value={tagExportProjectId}
                       onChange={(e) => setTagExportProjectId(e.target.value)}
                     >
@@ -5402,7 +5505,7 @@ function formatSizeGb(bytes) {
                       ))}
                     </select>
                   </div>
-                  <button className="btn btn-outline-dark btn-sm" type="button" onClick={handleExportTags}>
+                  <button className="btn btn-outline-dark btn-sm" type="button" title="Download tags as CSV with current export options." onClick={handleExportTags}>
                     Export tags
                   </button>
                 </div>
@@ -5412,6 +5515,7 @@ function formatSizeGb(bytes) {
                     <label className="form-label">Import hash</label>
                     <select
                       className="form-select"
+                      title="Hash column used for CSV import matching."
                       value={tagImportHash}
                       onChange={(e) => setTagImportHash(e.target.value)}
                     >
@@ -5423,6 +5527,7 @@ function formatSizeGb(bytes) {
                     <label className="form-label">Import project (optional)</label>
                     <select
                       className="form-select"
+                      title="Limit CSV import to one project, or import into all projects."
                       value={tagImportProjectId}
                       onChange={(e) => setTagImportProjectId(e.target.value)}
                     >
@@ -5438,6 +5543,7 @@ function formatSizeGb(bytes) {
                     <label className="form-label">Import mode</label>
                     <select
                       className="form-select"
+                      title="Replace overwrites tags, merge appends missing tags."
                       value={tagImportMode}
                       onChange={(e) => setTagImportMode(e.target.value)}
                     >
@@ -5450,6 +5556,7 @@ function formatSizeGb(bytes) {
                       <input
                         type="checkbox"
                         checked={Boolean(settings.tag_translate_enabled)}
+                        title="Translate imported tags via LLM after import."
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, tag_translate_enabled: e.target.checked }))
                         }
@@ -5461,9 +5568,10 @@ function formatSizeGb(bytes) {
                     className="form-control"
                     type="file"
                     accept=".csv"
+                    title="Choose a CSV file for tag import."
                     onChange={(e) => setTagImportFile(e.target.files?.[0] || null)}
                   />
-                  <button className="btn btn-outline-dark btn-sm" type="button" onClick={handleImportTags}>
+                  <button className="btn btn-outline-dark btn-sm" type="button" title="Import tags from selected CSV with current import options." onClick={handleImportTags}>
                     Import tags
                   </button>
                 </div>
@@ -5474,7 +5582,7 @@ function formatSizeGb(bytes) {
               <div className="tag-io-danger-text">
                 Deletes all tags for all assets. This cannot be undone.
               </div>
-              <button className="btn btn-outline-danger btn-sm" type="button" onClick={handleClearAllTags}>
+              <button className="btn btn-outline-danger btn-sm" type="button" title="Delete all tags for all assets. This cannot be undone." onClick={handleClearAllTags}>
                 Delete all tags
               </button>
             </div>
@@ -5482,6 +5590,7 @@ function formatSizeGb(bytes) {
             <button
               className="btn btn-outline-danger"
               type="button"
+              title="Open confirmation dialog to reset database (projects/assets removed, settings kept)."
               onClick={() => setShowResetModal(true)}
             >
               Reset database (keep settings)
@@ -5530,6 +5639,7 @@ function formatSizeGb(bytes) {
               <input
                 className="form-control"
                 placeholder="Type OK"
+                title="Type OK to enable the reset action."
                 value={resetConfirmInput}
                 onChange={(e) => setResetConfirmInput(e.target.value)}
               />
@@ -5537,6 +5647,7 @@ function formatSizeGb(bytes) {
                 <button
                   className="btn btn-danger btn-sm"
                   type="button"
+                  title="Permanently reset database after confirmation."
                   disabled={resetConfirmInput.trim().toLowerCase() !== "ok"}
                   onClick={async () => {
                     setShowResetModal(false);
@@ -5549,6 +5660,7 @@ function formatSizeGb(bytes) {
                 <button
                   className="btn btn-outline-dark btn-sm"
                   type="button"
+                  title="Close reset dialog without changes."
                   onClick={() => {
                     setShowResetModal(false);
                     setResetConfirmInput("");

@@ -94,6 +94,7 @@ STARTUP_IMPORT_STATUS: Dict[str, Any] = {
     "started_at": None,
     "finished_at": None,
 }
+PROJECT_DIR_SOURCE_MIN_BYTES = 50 * 1024 * 1024
 
 _event_queues: List["queue.Queue[str]"] = []
 _event_lock = threading.Lock()
@@ -1856,6 +1857,7 @@ class ProjectCreate(BaseModel):
     source_path: Optional[str] = None
     source_folder: Optional[str] = None
     full_project_copy: Optional[bool] = None
+    source_preference: Optional[str] = None
 
 
 class ProjectUpdate(BaseModel):
@@ -1870,6 +1872,7 @@ class ProjectUpdate(BaseModel):
     source_path: Optional[str] = None
     source_folder: Optional[str] = None
     full_project_copy: Optional[bool] = None
+    source_preference: Optional[str] = None
 
 
 class ProjectReimport(BaseModel):
@@ -4625,6 +4628,27 @@ def _dir_size_bytes(path: Optional[str]) -> int:
     return total
 
 
+def _project_dir_bytes(project: Dict[str, Any]) -> int:
+    folder_path = (project.get("folder_path") or "").strip()
+    if not folder_path:
+        return 0
+    try:
+        size_hint = int(project.get("size_bytes") or 0)
+    except Exception:
+        size_hint = 0
+    actual = _dir_size_bytes(folder_path)
+    return max(size_hint, actual)
+
+
+def _normalize_source_preference(value: Optional[str], default: str = "external") -> str:
+    raw = (value or "").strip().lower()
+    if raw in {"internal", "local", "project"}:
+        return "internal"
+    if raw in {"external", "source"}:
+        return "external"
+    return default
+
+
 def _resolve_source_content_path(row: Dict[str, Any]) -> Optional[Path]:
     source_path = (row.get("source_path") or "").strip()
     if not source_path:
@@ -4647,6 +4671,21 @@ def _project_screenshot_url_from_path(path_value: Optional[str]) -> str:
         return f"/media/{str(rel).replace('\\', '/')}"
     except ValueError:
         return ""
+
+
+def _mirror_project_image_to_media(project: Dict[str, Any], source_path: Path, target_name: str = "setcard.png") -> Optional[str]:
+    try:
+        if not source_path.exists() or not source_path.is_file():
+            return None
+        folder_path = Path(project.get("folder_path") or "")
+        project_slug = folder_path.name or f"project_{project.get('id')}"
+        media_project_dir = DATA_DIR / "projects" / project_slug
+        media_project_dir.mkdir(parents=True, exist_ok=True)
+        dest = media_project_dir / target_name
+        shutil.copy2(source_path, dest)
+        return str(dest)
+    except Exception:
+        return None
 
 
 def _normalize_legacy_project_folder_path(path_value: Optional[str]) -> str:
@@ -4849,6 +4888,7 @@ def _project_row_to_dict(row: Dict[str, Any]) -> Dict[str, Any]:
         "tags": json.loads(row.get("tags_json") or "[]"),
         "source_path": row.get("source_path") or "",
         "source_folder": (Path(row.get("source_folder")).name if row.get("source_folder") else ""),
+        "source_preference": _normalize_source_preference(row.get("source_preference"), "external"),
         "full_project_copy": bool(row.get("full_project_copy") or 0),
         "created_at": row.get("created_at") or now_iso(),
         "copy_started": False,
@@ -4917,9 +4957,9 @@ def _create_project_from_root(root_name: str) -> int:
         """
         INSERT INTO projects (
             name, link, size_bytes, folder_path, screenshot_path, art_style, project_era, tags_json, description, category_name, is_ai_generated, created_at,
-            source_path, source_folder, full_project_copy
+            source_path, source_folder, full_project_copy, source_preference
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             name,
@@ -4937,6 +4977,7 @@ def _create_project_from_root(root_name: str) -> int:
             None,
             name,
             0,
+            "external",
         ),
     )
     _db_retry(conn.commit)
@@ -5533,15 +5574,16 @@ def create_project(payload: ProjectCreate) -> Dict[str, Any]:
     screenshot_path = _copy_local_project_screenshot(screenshot_source, folder_path)
 
     tags_json = json.dumps(payload.tags or [])
+    source_pref = _normalize_source_preference(payload.source_preference, "external")
 
     cur = conn.cursor()
     cur.execute(
         """
         INSERT INTO projects (
             name, link, size_bytes, folder_path, screenshot_path, art_style, project_era, tags_json, description, category_name, is_ai_generated, created_at,
-            source_path, source_folder, full_project_copy
+            source_path, source_folder, full_project_copy, source_preference
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             payload.name.strip(),
@@ -5559,6 +5601,7 @@ def create_project(payload: ProjectCreate) -> Dict[str, Any]:
             str(source_project_root) if source_project_root else (payload.source_path or None),
             (Path(source_folder_path).name if source_folder_path else (payload.source_folder or None)),
             1 if full_copy else 0,
+            source_pref,
         ),
     )
     _db_retry(conn.commit)
@@ -5581,6 +5624,7 @@ def create_project(payload: ProjectCreate) -> Dict[str, Any]:
         "tags": payload.tags or [],
         "source_path": str(source_project_root) if source_project_root else (payload.source_path or ""),
         "source_folder": (Path(source_folder_path).name if source_folder_path else (payload.source_folder or "")),
+        "source_preference": source_pref,
         "created_at": now_iso(),
         "copy_started": copy_started,
         "full_project_copy": full_copy,
@@ -5627,6 +5671,7 @@ def list_projects(include_sizes: bool = False) -> List[Dict[str, Any]]:
                 "tags": json.loads(row["tags_json"] or "[]"),
                 "source_path": row.get("source_path") or "",
                 "source_folder": row.get("source_folder") or "",
+                "source_preference": _normalize_source_preference(row.get("source_preference"), "external"),
                 "full_project_copy": bool(row.get("full_project_copy") or 0),
                 "created_at": row["created_at"],
             }
@@ -5726,9 +5771,9 @@ def resolve_project(source_path: str, auto_create: bool = True) -> Dict[str, Any
             """
             INSERT INTO projects (
                 name, link, size_bytes, folder_path, screenshot_path, art_style, project_era, tags_json, created_at,
-                source_path, source_folder, full_project_copy
+                source_path, source_folder, full_project_copy, source_preference
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 project_name,
@@ -5743,6 +5788,7 @@ def resolve_project(source_path: str, auto_create: bool = True) -> Dict[str, Any
                 str(project_root) if project_root else source_path,
                 source_folder_name or None,
                 0,
+                "external",
             ),
         )
         _db_retry(conn.commit)
@@ -5772,6 +5818,7 @@ def export_projects() -> Response:
             "source_path",
             "source_folder",
             "full_project_copy",
+            "source_preference",
             "folder_path",
             "created_at",
             "screenshot_url",
@@ -5790,6 +5837,7 @@ def export_projects() -> Response:
                 row.get("source_path") or "",
                 row.get("source_folder") or "",
                 str(int(row.get("full_project_copy") or 0)),
+                _normalize_source_preference(row.get("source_preference"), "external"),
                 row.get("folder_path") or "",
                 row.get("created_at") or "",
                 _project_screenshot_url_from_path(row.get("screenshot_path")),
@@ -6009,6 +6057,7 @@ def get_project(project_id: int) -> Dict[str, Any]:
         "tags": json.loads(row["tags_json"] or "[]"),
         "source_path": row.get("source_path") or "",
         "source_folder": row.get("source_folder") or "",
+        "source_preference": _normalize_source_preference(row.get("source_preference"), "external"),
         "full_project_copy": bool(row.get("full_project_copy") or 0),
         "created_at": row["created_at"],
     }
@@ -6035,6 +6084,8 @@ def update_project(project_id: int, payload: ProjectUpdate) -> Dict[str, Any]:
         data["source_folder"] = (cleaned[-1] if cleaned else data["source_folder"]).strip() or None
     if "full_project_copy" in data and data["full_project_copy"] is not None:
         data["full_project_copy"] = 1 if data["full_project_copy"] else 0
+    if "source_preference" in data:
+        data["source_preference"] = _normalize_source_preference(data.get("source_preference"), "external")
 
     conn = get_db()
     project = fetch_one(conn, "SELECT * FROM projects WHERE id = ?", (project_id,))
@@ -6155,25 +6206,35 @@ def open_project_folder(project_id: int, target: str = Query("auto")) -> Dict[st
     if target == "project":
         return open_project()
 
-    # auto: prefer whichever side is larger (after size refresh), then fallback.
-    try:
-        project_size = int(project.get("size_bytes") or 0)
-    except Exception:
-        project_size = 0
+    source_pref = _normalize_source_preference(project.get("source_preference"), "external")
+    if source_pref == "internal":
+        try:
+            return open_project()
+        except HTTPException:
+            return open_source()
+    if source_pref == "external":
+        try:
+            return open_source()
+        except HTTPException:
+            return open_project()
+
+    # auto: prefer project folder only if it has meaningful data (>= 50 MB),
+    # otherwise keep using source side.
+    project_size = _project_dir_bytes(project)
     try:
         source_size = int(project.get("source_size_bytes") or 0)
     except Exception:
         source_size = 0
 
     if project_size > 0 or source_size > 0:
-        if project_size >= source_size:
+        if project_size >= PROJECT_DIR_SOURCE_MIN_BYTES and project_size >= source_size:
             return open_project()
         return open_source()
 
     # Fallback if size fields are not available yet.
     folder_path = project.get("folder_path") or ""
     content_dir = Path(folder_path) / "Content" if folder_path else None
-    if content_dir and content_dir.exists():
+    if project_size >= PROJECT_DIR_SOURCE_MIN_BYTES and content_dir and content_dir.exists():
         try:
             if any(p.is_file() for p in content_dir.rglob("*")):
                 return open_project()
@@ -6205,7 +6266,7 @@ def reimport_project(project_id: int, payload: ProjectReimport) -> Dict[str, Any
         raise HTTPException(status_code=400, detail="Source path is missing")
 
     conn.execute(
-        "UPDATE projects SET source_path = ?, source_folder = ?, full_project_copy = ?, reimported_once = 1 WHERE id = ?",
+        "UPDATE projects SET source_path = ?, source_folder = ?, full_project_copy = ?, reimported_once = 1, source_preference = 'internal' WHERE id = ?",
         (source_path, source_folder, 1 if full_copy else 0, project_id),
     )
     _db_retry(conn.commit)
@@ -6241,8 +6302,15 @@ def run_project_export_cmd(project_id: int, payload: ProjectExportCmd) -> Dict[s
 
     dest_root = Path(folder_path)
     source_root = Path(project["source_path"]).expanduser() if project.get("source_path") else None
-    reimported_once = bool(project.get("reimported_once") or 0)
-    if reimported_once:
+    source_pref = _normalize_source_preference(project.get("source_preference"), "external")
+    project_bytes = _project_dir_bytes(project)
+    if source_pref == "internal":
+        work_root = dest_root
+    elif source_pref == "external" and source_root and source_root.exists():
+        work_root = source_root
+    elif source_pref == "external":
+        work_root = dest_root
+    elif project_bytes >= PROJECT_DIR_SOURCE_MIN_BYTES:
         work_root = dest_root
     elif source_root and source_root.exists():
         work_root = source_root
@@ -7167,6 +7235,7 @@ def _run_projects_import_task(task_id: int) -> None:
                     raise ValueError("Source content path is required")
                 full_project_copy_raw = (row.get("full_project_copy") or "").strip().lower()
                 full_project_copy = full_project_copy_raw in {"1", "true", "yes", "on"}
+                source_preference = _normalize_source_preference((row.get("source_preference") or "").strip(), "external")
                 tags_value = (row.get("tags") or "").strip()
                 tags = [t.strip() for t in tags_value.split(",") if t.strip()]
 
@@ -7191,9 +7260,9 @@ def _run_projects_import_task(task_id: int) -> None:
                     """
                     INSERT INTO projects (
                         name, link, size_bytes, folder_path, screenshot_path, art_style, project_era, tags_json, description, category_name, is_ai_generated, created_at,
-                        source_path, source_folder, full_project_copy
+                        source_path, source_folder, full_project_copy, source_preference
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         name,
@@ -7211,6 +7280,7 @@ def _run_projects_import_task(task_id: int) -> None:
                         source_path,
                         source_folder,
                         1 if full_project_copy else 0,
+                        source_preference,
                     ),
                 )
                 created += 1
@@ -8108,7 +8178,7 @@ def get_asset(asset_id: str) -> Dict[str, Any]:
             conn,
             """
             SELECT id, name, link, folder_path, source_path, source_folder, full_project_copy, reimported_once,
-                   export_include_json, export_exclude_json, art_style, project_era
+                   source_preference, export_include_json, export_exclude_json, art_style, project_era
             FROM projects
             WHERE id = ?
             """,
@@ -8122,6 +8192,7 @@ def get_asset(asset_id: str) -> Dict[str, Any]:
                 "folder_path": project_row.get("folder_path"),
                 "source_path": project_row.get("source_path") or "",
                 "source_folder": (Path(project_row.get("source_folder")).name if project_row.get("source_folder") else ""),
+                "source_preference": _normalize_source_preference(project_row.get("source_preference"), "external"),
                 "full_project_copy": bool(project_row.get("full_project_copy") or 0),
                 "reimported_once": bool(project_row.get("reimported_once") or 0),
                 "export_include": json.loads(project_row.get("export_include_json") or "[]"),
@@ -8371,14 +8442,32 @@ def generate_project_setcard(project_id: int, force: bool = Query(False)) -> Dic
         raise HTTPException(status_code=404, detail="Folder not found")
 
     out_path = folder_path / "setcard.png"
+    # Always keep a physical setcard file in the project directory.
+    def _ensure_project_setcard(source: Path) -> None:
+        try:
+            if source.resolve() != out_path.resolve() and source.exists():
+                shutil.copy2(source, out_path)
+        except Exception:
+            pass
+
     if out_path.exists() and not force:
         url = _project_screenshot_url_from_path(str(out_path))
+        if not url:
+            mirrored = _mirror_project_image_to_media(project, out_path, "setcard.png")
+            if mirrored:
+                url = _project_screenshot_url_from_path(mirrored)
         return {"status": "ok", "setcard_url": url}
 
     created = _generate_project_setcard(project)
     if not created:
         raise HTTPException(status_code=400, detail="Setcard generation failed: no preview images found")
-    url = _project_screenshot_url_from_path(created)
+    created_path = Path(created)
+    _ensure_project_setcard(created_path)
+    url = _project_screenshot_url_from_path(str(out_path))
+    if not url:
+        mirrored = _mirror_project_image_to_media(project, out_path if out_path.exists() else created_path, "setcard.png")
+        if mirrored:
+            url = _project_screenshot_url_from_path(mirrored)
     return {"status": "ok", "setcard_url": url}
 
 

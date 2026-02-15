@@ -54,6 +54,7 @@ def init_db() -> None:
             art_style TEXT,
             tags_json TEXT,
             full_project_copy INTEGER NOT NULL DEFAULT 0,
+            source_preference TEXT NOT NULL DEFAULT 'external',
             created_at TEXT NOT NULL
         )
         """
@@ -238,6 +239,7 @@ def init_db() -> None:
     ensure_column(conn, "projects", "export_exclude_json", "TEXT")
     ensure_column(conn, "projects", "full_project_copy", "INTEGER")
     ensure_column(conn, "projects", "reimported_once", "INTEGER")
+    ensure_column(conn, "projects", "source_preference", "TEXT")
     ensure_column(conn, "projects", "project_era", "TEXT")
     ensure_column(conn, "projects", "description", "TEXT")
     ensure_column(conn, "projects", "category_name", "TEXT")
@@ -309,6 +311,11 @@ def init_db() -> None:
         ON assets(project_id, hash_full_blake3)
         WHERE hash_full_blake3 IS NOT NULL AND hash_full_blake3 != ''
         """
+    )
+
+    cur.execute(
+        "UPDATE projects SET source_preference = 'external' "
+        "WHERE source_preference IS NULL OR TRIM(source_preference) = ''"
     )
 
     conn.commit()
