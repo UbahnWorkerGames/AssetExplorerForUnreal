@@ -1222,6 +1222,10 @@ body {
   width: min(520px, 92vw);
 }
 
+.create-project-title {
+  color: #111111;
+}
+
 .project-list-actions .btn {
   color: #111111 !important;
 }

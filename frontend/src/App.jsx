@@ -578,7 +578,8 @@ export default function App() {
     if (provider === "groq") return hasGroqKey;
     return hasApiKey;
   }, [settings.provider, hasApiKey, hasOpenAiKey, hasOpenRouterKey, hasGroqKey]);
-  const llmReadyTitle = llmReady ? "" : "LLM key required for active provider";
+  const llmReadyTitle = llmReady ? "" : "LLM key required for active provider (configure in Settings).";
+  const withLlmTitle = (title) => (llmReady ? title : `${title} ${llmReadyTitle}`);
   const activeProviderLabel = useMemo(() => {
     const provider = (settings.provider || "").toLowerCase();
     if (provider === "openai") return "OpenAI";
@@ -3580,7 +3581,7 @@ function formatSizeGb(bytes) {
                             className="btn btn-outline-dark btn-sm"
                             type="button"
                             onClick={handleTagMissingAllProjects}
-                            title="Tags only; embeddings are not generated."
+                            title="Tag assets across all projects that have never been AI-tagged yet (based on tags_done_at)."
                           >
                             Tag missing (all)
                           </button>
@@ -3596,7 +3597,7 @@ function formatSizeGb(bytes) {
                             className="btn btn-outline-dark btn-sm"
                             type="button"
                             onClick={handleNameTagsAllSimpleMissing}
-                            title="Generate tags from asset names only for assets below the missing-tag threshold (local processing)."
+                            title="Generate tags from asset names only for assets not processed by this action yet (name_tags_done_at missing)."
                           >
                             Name to tags missing (all)
                           </button>
@@ -3612,7 +3613,7 @@ function formatSizeGb(bytes) {
                             type="button"
                             onClick={handleTranslateNameTagsAll}
                             disabled={!llmReady}
-                            title={llmReadyTitle}
+                            title={withLlmTitle("Use LLM to generate title-like tags from asset names for all projects.")}
                           >
                           Asset title (all)
                           </button>
@@ -3621,7 +3622,7 @@ function formatSizeGb(bytes) {
                             type="button"
                             onClick={handleTranslateNameTagsAllMissing}
                             disabled={!llmReady}
-                            title={llmReadyTitle}
+                            title={withLlmTitle("Use LLM to generate title-like tags from asset names only where this action has not run yet (name_translate_tags_done_at missing).")}
                           >
                           Asset title missing (all)
                           </button>
@@ -3630,7 +3631,7 @@ function formatSizeGb(bytes) {
                             type="button"
                             onClick={handleTranslateAllTags}
                             disabled={!llmReady}
-                            title={llmReadyTitle}
+                            title={withLlmTitle("Use LLM to translate existing tags for all projects into the configured language.")}
                           >
                           Translate tags (all)
                           </button>
@@ -3639,7 +3640,7 @@ function formatSizeGb(bytes) {
                             type="button"
                             onClick={handleTranslateAllTagsMissing}
                             disabled={!llmReady}
-                            title={llmReadyTitle}
+                            title={withLlmTitle("Use LLM to translate existing tags only for assets not processed by tag translation yet (translate_tags_done_at missing).")}
                           >
                           Translate tags missing (all)
                           </button>
@@ -3989,7 +3990,7 @@ function formatSizeGb(bytes) {
                                     <FontAwesomeIcon icon={faHardDrive} /> Local
                                   </div>
                                   <div className="project-action-row">
-                                    <button className="btn btn-outline-dark btn-sm" onClick={() => handleTagMissing(project.id)} title="Tag assets in this project that are below the minimum tag threshold.">
+                                    <button className="btn btn-outline-dark btn-sm" onClick={() => handleTagMissing(project.id)} title="Tag assets in this project that have not been AI-tagged yet (based on tags_done_at).">
                                       Tag missing
                                     </button>
                                     <button className="btn btn-outline-dark btn-sm" onClick={() => handleRetagAll(project.id)} title="Regenerate and replace tags for all assets in this project (local processing).">
@@ -4014,7 +4015,7 @@ function formatSizeGb(bytes) {
                                       className="btn btn-outline-dark btn-sm"
                                       type="button"
                                       onClick={() => handleNameTagsProjectSimpleMissing(project.id)}
-                                      title="Generate tags from asset names only for missing-tag assets in this project (local processing)."
+                                      title="Generate tags from asset names only for assets not processed by this action yet in this project (name_tags_done_at missing)."
                                     >
                                       Name to tags missing
                                     </button>
@@ -4030,7 +4031,7 @@ function formatSizeGb(bytes) {
                                       type="button"
                                       onClick={() => handleTranslateNameTagsProject(project.id)}
                                       disabled={!llmReady}
-                                      title={llmReadyTitle}
+                                      title={withLlmTitle("Use LLM to generate title-like tags from asset names for all assets in this project.")}
                                     >
                                       Asset title
                                     </button>
@@ -4039,7 +4040,7 @@ function formatSizeGb(bytes) {
                                       type="button"
                                       onClick={() => handleTranslateNameTagsProjectMissing(project.id)}
                                       disabled={!llmReady}
-                                      title={llmReadyTitle}
+                                      title={withLlmTitle("Use LLM to generate title-like tags from asset names only where this action has not run yet in this project (name_translate_tags_done_at missing).")}
                                     >
                                       Asset title missing
                                     </button>
@@ -4048,7 +4049,7 @@ function formatSizeGb(bytes) {
                                       type="button"
                                       onClick={() => handleTranslateTagsProject(project.id)}
                                       disabled={!llmReady}
-                                      title={llmReadyTitle}
+                                      title={withLlmTitle("Use LLM to translate existing tags for all assets in this project into the configured language.")}
                                     >
                                       Translate tags
                                     </button>
@@ -4057,7 +4058,7 @@ function formatSizeGb(bytes) {
                                       type="button"
                                       onClick={() => handleTranslateTagsProjectMissing(project.id)}
                                       disabled={!llmReady}
-                                      title={llmReadyTitle}
+                                      title={withLlmTitle("Use LLM to translate existing tags only for assets not processed by tag translation yet in this project (translate_tags_done_at missing).")}
                                     >
                                       Translate tags missing
                                     </button>
@@ -4067,10 +4068,11 @@ function formatSizeGb(bytes) {
                                   <button
                                     className="btn btn-outline-danger btn-sm"
                                     onClick={() => handleDeleteProjectAssets(project.id)}
+                                    title="Delete all assets from the database for this project. Project files on disk are kept."
                                   >
                                     Delete assets
                                   </button>
-                                  <button className="btn btn-outline-danger btn-sm" onClick={() => handleDeleteProject(project.id)}>
+                                  <button className="btn btn-outline-danger btn-sm" onClick={() => handleDeleteProject(project.id)} title="Delete project and all its assets from the database. Files on disk are kept.">
                                     Delete project
                                   </button>
                                 </div>
@@ -4100,7 +4102,7 @@ function formatSizeGb(bytes) {
               <div className="modal-overlay" onClick={() => setShowCreateProject(false)}>
                 <div className="project-modal" onClick={(e) => e.stopPropagation()}>
                   <form className="project-form" onSubmit={handleCreateProject}>
-                    <h3>Create project</h3>
+                    <h3 className="create-project-title">Create project</h3>
                     <input
                       className="form-control"
                       placeholder="Name"

@@ -41,6 +41,11 @@ fi
 echo "[4/4] Starting backend with bundled UI..."
 export ASSET_UI=true
 export ASSET_UI_DIST="$DIST_DIR"
+export ASSET_SERVER_HOST=0.0.0.0
+export ASSET_SERVER_PORT=8008
+export ASSET_SERVER_LOG_LEVEL=info
+export ASSET_SERVER_RELOAD=0
+export ASSET_SERVER_CWD="$BACKEND_DIR"
 
 cd "$BACKEND_DIR"
 exec "$VENV_PYTHON" -m uvicorn main:app --host 0.0.0.0 --port 8008 --log-level info

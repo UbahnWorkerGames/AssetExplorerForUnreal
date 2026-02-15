@@ -108,6 +108,48 @@ chmod +x build-ui.sh
 
 If UI assets fail to load after a new build, rebuild frontend and hard-refresh browser cache.
 
+## UI Overview
+
+Screenshots (from `Images/`):
+
+![Overview 1](Images/1.jpg)
+![Overview 2](Images/2.jpg)
+![Overview 3](Images/3.jpg)
+![Overview 4](Images/4.jpg)
+![Overview 5](Images/5.jpg)
+
+## Project Actions (What Each Button Does)
+
+Global row:
+
+- `View Assets`: open the asset list filtered to the selected project.
+- `Edit`: edit project name, source path/folder, and metadata.
+- `Sync`: reimport/sync files from the configured source into local project storage.
+- `Open Project Folder`: open local project folder on disk.
+- `Open Source Folder`: open configured source folder on disk.
+- `Setcard`: generate or refresh `setcard.png` from project preview images.
+- `Re-export via UE Cmd`: run UnrealEditor-Cmd export flow, then reimport/sync.
+
+Local row:
+
+- `Tag missing`: queue AI tagging for assets not tagged yet (`asset_tags.tags_done_at` missing).
+- `Tag all`: queue full retag and replace existing tags.
+- `Rebuild semantic`: rebuild embeddings for project assets.
+- `Name to tags`: create tags from asset names (local, no LLM translation).
+- `Name to tags missing`: run name-to-tags only for assets not processed by this action yet (`name_tags_done_at` missing).
+
+LLM row (provider-dependent):
+
+- `Asset title`: LLM name-to-tag generation for all assets in the project.
+- `Asset title missing`: same, but only where `name_translate_tags_done_at` is missing.
+- `Translate tags`: LLM translation of existing tags for all assets in the project.
+- `Translate tags missing`: same, but only where `translate_tags_done_at` is missing.
+
+Danger row:
+
+- `Delete assets`: delete project assets from DB (files on disk stay untouched).
+- `Delete project`: delete project and its DB asset records (files on disk stay untouched).
+
 ## Notes
 
 - SQLite is used by default; long-running write tasks can temporarily lock DB operations.

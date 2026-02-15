@@ -53,6 +53,11 @@ if not exist "%DIST_DIR%\index.html" (
 echo [3/4] Starting backend with bundled UI...
 set ASSET_UI=true
 set ASSET_UI_DIST=%DIST_DIR%
+set ASSET_SERVER_HOST=0.0.0.0
+set ASSET_SERVER_PORT=8008
+set ASSET_SERVER_LOG_LEVEL=info
+set ASSET_SERVER_RELOAD=0
+set ASSET_SERVER_CWD=%BACKEND_DIR%
 
 set PORT_PID=
 for /f "tokens=5" %%P in ('netstat -ano ^| findstr /C:":8008" ^| findstr /C:"LISTENING"') do (

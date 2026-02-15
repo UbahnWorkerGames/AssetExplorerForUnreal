@@ -11,6 +11,7 @@ import shutil
 import sqlite3
 import subprocess
 import shlex
+import sys
 import tempfile
 import threading
 import time
@@ -5395,10 +5396,74 @@ def _delayed_process_exit(delay_seconds: float = 0.8) -> None:
         os._exit(0)
 
 
+def _restart_command() -> List[str]:
+    # Optional explicit override, e.g.:
+    # ASSET_RESTART_CMD='python -m uvicorn main:app --host 0.0.0.0 --port 8008 --log-level info'
+    raw_cmd = (os.getenv("ASSET_RESTART_CMD") or "").strip()
+    if raw_cmd:
+        return shlex.split(raw_cmd, posix=(os.name != "nt"))
+
+    host = (os.getenv("ASSET_SERVER_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+    port = (os.getenv("ASSET_SERVER_PORT") or "8008").strip() or "8008"
+    log_level = (os.getenv("ASSET_SERVER_LOG_LEVEL") or "info").strip() or "info"
+    reload_flag = (os.getenv("ASSET_SERVER_RELOAD") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "uvicorn",
+        "main:app",
+        "--host",
+        host,
+        "--port",
+        port,
+        "--log-level",
+        log_level,
+    ]
+    if reload_flag:
+        cmd.append("--reload")
+    return cmd
+
+
+def _restart_cwd() -> str:
+    configured = (os.getenv("ASSET_SERVER_CWD") or "").strip()
+    if configured:
+        return configured
+    return str(Path(__file__).resolve().parent)
+
+
+def _schedule_relaunch() -> None:
+    cmd = _restart_command()
+    cwd = _restart_cwd()
+    payload = json.dumps({"cmd": cmd, "cwd": cwd})
+
+    helper = "\n".join([
+        "import json",
+        "import os",
+        "import subprocess",
+        "import sys",
+        "import time",
+        "cfg = json.loads(sys.argv[1])",
+        "time.sleep(1.0)",
+        "kwargs = {'cwd': cfg.get('cwd') or None, 'env': os.environ.copy(), 'close_fds': True}",
+        "flags = 0",
+        "if os.name == 'nt':",
+        "    flags |= 0x00000008",  # DETACHED_PROCESS
+        "    flags |= 0x00000200",  # CREATE_NEW_PROCESS_GROUP
+        "if flags:",
+        "    kwargs['creationflags'] = flags",
+        "subprocess.Popen(cfg['cmd'], **kwargs)",
+    ])
+    subprocess.Popen([sys.executable, "-c", helper, payload], close_fds=True)
+
+
 @app.post("/server/restart")
 def restart_server() -> Dict[str, Any]:
-    # Intended for local tooling. With uvicorn --reload, the reloader process
-    # should spawn a fresh worker after this process exits.
+    try:
+        _schedule_relaunch()
+    except Exception as exc:
+        logger.error("Restart scheduling failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Restart scheduling failed: {exc}")
     threading.Thread(target=_delayed_process_exit, daemon=True).start()
     return {"status": "restarting", "message": "Server restart requested"}
 

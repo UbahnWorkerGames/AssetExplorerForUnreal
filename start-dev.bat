@@ -64,6 +64,11 @@ start "UnrealAssetExplorer Frontend" cmd /k "cd /d ""%FRONTEND_DIR%"" && call np
 
 echo [start] Starting backend (foreground)...
 cd /d "%BACKEND_DIR%"
+set ASSET_SERVER_HOST=127.0.0.1
+set ASSET_SERVER_PORT=8008
+set ASSET_SERVER_LOG_LEVEL=info
+set ASSET_SERVER_RELOAD=1
+set ASSET_SERVER_CWD=%BACKEND_DIR%
 call "%PYTHON%" -m uvicorn main:app --reload --host 127.0.0.1 --port 8008 --log-level info
 
 echo Backend exited.
