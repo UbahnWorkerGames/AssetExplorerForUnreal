@@ -4223,13 +4223,28 @@ def _build_snapshot_zip(asset: Dict[str, Any], project: Dict[str, Any], include_
     if not files:
         raise HTTPException(status_code=400, detail="No files_on_disk in asset meta")
 
-    content_root = Path(project["folder_path"]) / "Content"
-    source_content_root = _resolve_source_content_path(project)
+    source_content_root = _resolve_source_content_base_path(project)
+    project_content_root = Path(_normalize_legacy_project_folder_path(project.get("folder_path"))) / "Content"
+    source_pref = _normalize_source_preference(project.get("source_preference"), "external")
+    if source_pref == "external":
+        if source_content_root and source_content_root.exists():
+            content_root = source_content_root
+        else:
+            content_root = project_content_root
+    else:
+        if project_content_root.exists():
+            content_root = project_content_root
+        elif source_content_root and source_content_root.exists():
+            content_root = source_content_root
+        else:
+            content_root = project_content_root
+
     logger.info(
-        "Download zip request asset_id=%s hash=%s project_id=%s content_root=%s",
+        "Download zip request asset_id=%s hash=%s project_id=%s source_pref=%s content_root=%s",
         asset.get("id"),
         asset.get("hash_main_blake3") or "",
         project.get("id"),
+        source_pref,
         str(content_root),
     )
     if not content_root.exists():
@@ -4264,8 +4279,9 @@ def _build_snapshot_zip(asset: Dict[str, Any], project: Dict[str, Any], include_
 
     resolved_sources = _resolve_source_paths(project.get("source_path"), project.get("source_folder"))
     source_project_root = resolved_sources.get("project_root")
-    source_content_root = _resolve_source_content_path(project)
     extra_roots: List[Path] = []
+    if project_content_root.exists() and project_content_root.resolve() != content_root.resolve():
+        extra_roots.append(project_content_root)
     if source_content_root and source_content_root.exists():
         if source_content_root.resolve() != content_root.resolve():
             extra_roots.append(source_content_root)
@@ -4482,6 +4498,10 @@ def _reimport_project(
     full_project_copy: bool = False,
 ) -> None:
     try:
+        # Force sync destination to the server-local projects directory.
+        canonical_dest = (PROJECTS_DIR / dest_root.name).resolve()
+        if canonical_dest != dest_root:
+            dest_root = canonical_dest
         resolved = _resolve_source_paths(source_path, source_folder)
         project_root = resolved.get("project_root")
         folder_path = resolved.get("source_folder")
@@ -4663,6 +4683,20 @@ def _resolve_source_content_path(row: Dict[str, Any]) -> Optional[Path]:
     return base
 
 
+def _resolve_source_content_base_path(row: Dict[str, Any]) -> Optional[Path]:
+    resolved = _resolve_source_paths(row.get("source_path"), row.get("source_folder"))
+    project_root = resolved.get("project_root")
+    if project_root:
+        return project_root / "Content"
+    source_path = (row.get("source_path") or "").strip()
+    if not source_path:
+        return None
+    base = Path(source_path)
+    if base.name.lower() == "content":
+        return base
+    return base / "Content"
+
+
 def _project_screenshot_url_from_path(path_value: Optional[str]) -> str:
     if not path_value:
         return ""
@@ -4693,20 +4727,67 @@ def _normalize_legacy_project_folder_path(path_value: Optional[str]) -> str:
     if not raw:
         return ""
     try:
-        p = Path(raw)
-        if p.exists():
-            return str(p)
+        p = Path(raw).expanduser()
     except Exception:
-        return raw
-    marker = f"{os.sep}Plugins{os.sep}AssetMetaExplorerBridge{os.sep}open{os.sep}data{os.sep}"
-    if marker in raw:
-        candidate = raw.replace(marker, f"{os.sep}open{os.sep}data{os.sep}")
+        p = Path(raw)
+
+    # Canonical rule: project folder must live under DATA_DIR/projects.
+    # Keep the project folder name (including timestamp suffix), never "Content".
+    parts_raw = [part for part in str(p).replace("\\", "/").split("/") if part]
+    parts_lc = [part.lower() for part in parts_raw]
+    slug = ""
+    if "projects" in parts_lc:
+        idx = parts_lc.index("projects")
+        if idx + 1 < len(parts_raw):
+            slug = parts_raw[idx + 1]
+    if not slug:
+        name = p.name if p.name else ""
+        if name.lower() == "content" and p.parent:
+            name = p.parent.name
+        slug = name
+    if slug:
+        canonical = (PROJECTS_DIR / slug).resolve()
+        if canonical.exists():
+            return str(canonical)
+
+    normalized = raw.replace("\\", "/")
+    marker = "/open/data/"
+    idx = normalized.lower().find(marker)
+    if idx >= 0:
+        tail = normalized[idx + len(marker):].lstrip("/")
+        candidate = (DATA_DIR / Path(tail)).resolve()
+        tail_parts = [part for part in tail.split("/") if part]
+        tail_parts_lc = [part.lower() for part in tail_parts]
+        if "projects" in tail_parts_lc:
+            pidx = tail_parts_lc.index("projects")
+            if pidx + 1 < len(tail_parts):
+                slug = tail_parts[pidx + 1]
+                return str((PROJECTS_DIR / slug).resolve())
         try:
-            if Path(candidate).exists():
-                return str(Path(candidate))
+            if candidate.exists():
+                return str(candidate)
         except Exception:
             pass
-    return raw
+        if tail.lower().startswith("projects/"):
+            return str(candidate)
+
+    if slug:
+        return str((PROJECTS_DIR / slug).resolve())
+    return str((PROJECTS_DIR / "project").resolve())
+
+
+def _normalize_project_folder_for_project(conn: Optional[sqlite3.Connection], project: Dict[str, Any]) -> str:
+    raw = (project.get("folder_path") or "").strip()
+    normalized = _normalize_legacy_project_folder_path(raw)
+    if normalized and normalized != raw:
+        project["folder_path"] = normalized
+        if conn is not None and project.get("id") is not None:
+            try:
+                conn.execute("UPDATE projects SET folder_path = ? WHERE id = ?", (normalized, int(project["id"])))
+                _db_retry(conn.commit)
+            except Exception:
+                pass
+    return normalized or raw
 
 
 def _pick_project_image_from_folder(folder_path: Optional[str]) -> Optional[str]:
@@ -6164,9 +6245,11 @@ def upload_project_screenshot(
 def open_project_folder(project_id: int, target: str = Query("auto")) -> Dict[str, str]:
     conn = get_db()
     project = fetch_one(conn, "SELECT * FROM projects WHERE id = ?", (project_id,))
-    conn.close()
     if not project:
+        conn.close()
         raise HTTPException(status_code=404, detail="Project not found")
+    _normalize_project_folder_for_project(conn, project)
+    conn.close()
 
     def open_source() -> Dict[str, str]:
         source_content = _resolve_source_content_path(project)
@@ -6250,6 +6333,7 @@ def reimport_project(project_id: int, payload: ProjectReimport) -> Dict[str, Any
     if not project:
         conn.close()
         raise HTTPException(status_code=404, detail="Project not found")
+    _normalize_project_folder_for_project(conn, project)
 
     source_path = payload.source_path or project.get("source_path")
     source_folder = payload.source_folder or project.get("source_folder")
@@ -6264,15 +6348,16 @@ def reimport_project(project_id: int, payload: ProjectReimport) -> Dict[str, Any
     if not source_path and not source_folder:
         conn.close()
         raise HTTPException(status_code=400, detail="Source path is missing")
+    canonical_folder_path = _normalize_legacy_project_folder_path(project.get("folder_path"))
 
     conn.execute(
-        "UPDATE projects SET source_path = ?, source_folder = ?, full_project_copy = ?, reimported_once = 1, source_preference = 'internal' WHERE id = ?",
-        (source_path, source_folder, 1 if full_copy else 0, project_id),
+        "UPDATE projects SET source_path = ?, source_folder = ?, full_project_copy = ?, reimported_once = 1, source_preference = 'internal', folder_path = ? WHERE id = ?",
+        (source_path, source_folder, 1 if full_copy else 0, canonical_folder_path, project_id),
     )
     _db_retry(conn.commit)
     conn.close()
 
-    folder_path = Path(project["folder_path"])
+    folder_path = Path(canonical_folder_path)
     _set_copy_progress(project_id, {"status": "queued", "copied": 0, "total": 0})
     thread = threading.Thread(
         target=_reimport_project,
@@ -6288,9 +6373,11 @@ def run_project_export_cmd(project_id: int, payload: ProjectExportCmd) -> Dict[s
     conn = get_db()
     settings = get_settings(conn)
     project = fetch_one(conn, "SELECT * FROM projects WHERE id = ?", (project_id,))
-    conn.close()
     if not project:
+        conn.close()
         raise HTTPException(status_code=404, detail="Project not found")
+    _normalize_project_folder_for_project(conn, project)
+    conn.close()
 
     ue_cmd = (settings.get("ue_cmd_path") or "").strip()
     if not ue_cmd:
@@ -8095,7 +8182,7 @@ def migrate_asset(asset_id: int, payload: AssetMigrateRequest) -> Dict[str, Any]
         raise HTTPException(status_code=400, detail="No files to migrate")
 
     source_root = Path(project["folder_path"]) / "Content"
-    source_fallback_root = _resolve_source_content_path(project)
+    source_fallback_root = _resolve_source_content_base_path(project)
     if not source_root.exists() and (not source_fallback_root or not source_fallback_root.exists()):
         raise HTTPException(status_code=400, detail="Project Content folder not found")
 
@@ -8221,6 +8308,8 @@ def download_snapshot(snapshot_id: str, background_tasks: BackgroundTasks, layou
     project = None
     if row.get("project_id"):
         project = fetch_one(conn, "SELECT * FROM projects WHERE id = ?", (row["project_id"],))
+        if project:
+            _normalize_project_folder_for_project(conn, project)
     conn.close()
 
     if project:

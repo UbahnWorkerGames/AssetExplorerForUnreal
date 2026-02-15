@@ -137,12 +137,32 @@ function resolveApiUrl(path) {
 function getProjectCoverUrl(project) {
   const explicit = resolveApiUrl(project?.screenshot_url);
   if (explicit) return explicit;
+  return getProjectSetcardUrl(project);
+}
+
+function getProjectSetcardUrl(project) {
   const folderPath = String(project?.folder_path || "").trim();
   if (!folderPath) return "";
   const normalized = folderPath.replace(/\\/g, "/").replace(/\/+$/, "");
   const slug = normalized.split("/").pop();
   if (!slug) return "";
-  return resolveApiUrl(`/media/projects/${slug}/screenshot.jpg`);
+  return resolveApiUrl(`/media/projects/${slug}/setcard.png`);
+}
+
+function getProjectActivePath(project) {
+  const pref = String(project?.source_preference || "external").toLowerCase();
+  const folderPath = String(project?.folder_path || "").trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  const sourcePath = String(project?.source_path || "").trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  const sourceFolder = String(project?.source_folder || "").trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+
+  const internalContent = folderPath ? `${folderPath}/Content` : "";
+  const externalBase = sourcePath
+    ? (sourcePath.toLowerCase().endsWith("/content") ? sourcePath : `${sourcePath}/Content`)
+    : "";
+  const externalContent = externalBase ? (sourceFolder ? `${externalBase}/${sourceFolder}` : externalBase) : "";
+
+  if (pref === "internal") return internalContent || externalContent || folderPath || sourcePath;
+  return externalContent || internalContent || sourcePath || folderPath;
 }
 function truncateText(value, maxLength) {
   if (!value) return "";
@@ -1230,19 +1250,10 @@ export default function App() {
   useEffect(() => {
     const url = new URL(window.location.href);
     const assetParam = url.searchParams.get("asset");
-    const projectParam = url.searchParams.get("project_content");
     if (assetParam) {
       const parsed = Number(assetParam);
       if (!Number.isNaN(parsed)) {
         setSelectedAssetId(parsed);
-      }
-    }
-    if (projectParam) {
-      const parsed = Number(projectParam);
-      if (!Number.isNaN(parsed)) {
-        setView("assets");
-        setSelectedProjects([String(parsed)]);
-        resetPaging(true, true);
       }
     }
   }, []);
@@ -2265,7 +2276,7 @@ export default function App() {
   async function handleOpenProject(project) {
     toast.info("Opening folder...");
     try {
-      await openProject(project.id);
+      await openProject(project.id, "project");
     } catch (err) {
       console.error(err);
       toast.error("Open folder failed");
@@ -2520,12 +2531,6 @@ export default function App() {
     setSelectedAssetId(null);
     setSelectedAsset(null);
     resetPaging(true, true);
-    if (window.history?.pushState) {
-      const url = new URL(window.location.href);
-      url.searchParams.delete("asset");
-      url.searchParams.set("project_content", String(projectId));
-      window.history.pushState({ projectContent: projectId }, "", url.toString());
-    }
     handleViewClick("assets", true);
   }
   function formatApproxSize(meta) {
@@ -3861,7 +3866,19 @@ function formatSizeGb(bytes) {
                                 <img
                                   src={getProjectCoverUrl(project)}
                                   alt={project.name}
-                                  onClick={() => setProjectPreview(getProjectCoverUrl(project))}
+                                  onError={(e) => {
+                                    const fallback = getProjectSetcardUrl(project);
+                                    if (fallback && e.currentTarget.src !== fallback) {
+                                      e.currentTarget.src = fallback;
+                                      return;
+                                    }
+                                    e.currentTarget.onerror = null;
+                                  }}
+                                  onClick={(e) =>
+                                    setProjectPreview(
+                                      e.currentTarget.currentSrc || e.currentTarget.src || getProjectCoverUrl(project)
+                                    )
+                                  }
                                 />
                               ) : (
                                 <div className="thumb-placeholder">No image</div>
@@ -3951,6 +3968,12 @@ function formatSizeGb(bytes) {
                                   >
                                     Internal
                                   </button>
+                                </span>
+                              </div>
+                              <div className="project-meta">
+                                <span className="project-meta-label">Active path</span>
+                                <span className="project-meta-value" style={{ fontSize: "10px", opacity: 0.85 }}>
+                                  {getProjectActivePath(project) || "-"}
                                 </span>
                               </div>
                               {projectStats[project.id]?.types &&
