@@ -617,9 +617,10 @@ export default function App() {
     default_full_project_copy: false,
     tag_include_types: "",
     tag_exclude_types: "",
-    setcard_size_px: 1024,
+    setcard_size_px: 256,
     setcard_items_per_row: 5,
     setcard_rows: 4,
+    setcard_single_image_only: false,
     setcard_include_types: "",
     setcard_exclude_types: "",
     tag_missing_min_tags: 1,
@@ -1103,6 +1104,10 @@ export default function App() {
       if (clean.tag_use_batch_mode !== undefined) {
         const raw = String(clean.tag_use_batch_mode).toLowerCase();
         clean.tag_use_batch_mode = raw === "true" || raw === "1" || raw === "yes" || raw === "on";
+      }
+      if (clean.setcard_single_image_only !== undefined) {
+        const raw = String(clean.setcard_single_image_only).toLowerCase();
+        clean.setcard_single_image_only = raw === "true" || raw === "1" || raw === "yes" || raw === "on";
       }
       if (clean.generate_embeddings_on_import !== undefined) {
         const raw = String(clean.generate_embeddings_on_import).toLowerCase();
@@ -2263,6 +2268,9 @@ export default function App() {
       if (payload.tag_use_batch_mode !== undefined) {
         payload.tag_use_batch_mode = payload.tag_use_batch_mode ? "true" : "false";
       }
+      if (payload.setcard_single_image_only !== undefined) {
+        payload.setcard_single_image_only = payload.setcard_single_image_only ? "true" : "false";
+      }
       if (payload.tag_batch_max_assets !== undefined && payload.tag_batch_max_assets !== "") {
         const parsedBatch = Number(payload.tag_batch_max_assets);
         if (Number.isNaN(parsedBatch)) {
@@ -2284,7 +2292,7 @@ export default function App() {
         if (Number.isNaN(parsedSetcardSize)) {
           delete payload.setcard_size_px;
         } else {
-          payload.setcard_size_px = Math.max(128, Math.min(8192, parsedSetcardSize));
+          payload.setcard_size_px = Math.max(64, Math.min(4096, parsedSetcardSize));
         }
       }
       if (payload.setcard_items_per_row !== undefined && payload.setcard_items_per_row !== "") {
@@ -5766,15 +5774,15 @@ function formatSizeGb(bytes) {
                 <div className="settings-compact-grid">
                   <div className="settings-compact-item">
                     <div className="form-row">
-                      <label className="form-label">Setcard size (px, 1:1)</label>
+                      <label className="form-label">Tile size per item (px)</label>
                       <input
                         className="form-control"
                         type="number"
-                        min="128"
-                        max="8192"
+                        min="64"
+                        max="4096"
                         step="1"
-                        title="Final setcard canvas size in pixels (square 1:1)."
-                        value={settings.setcard_size_px ?? 1024}
+                        title="Pixel size of each item tile. Final setcard resolution is derived from rows/columns."
+                        value={settings.setcard_size_px ?? 256}
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, setcard_size_px: Number(e.target.value || 0) }))
                         }
@@ -5815,9 +5823,24 @@ function formatSizeGb(bytes) {
                       />
                     </div>
                   </div>
+                  <div className="settings-compact-item">
+                    <div className="form-row">
+                      <label className="form-label">Output</label>
+                      <label className="filter-item">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(settings.setcard_single_image_only)}
+                          onChange={(e) =>
+                            setSettings((prev) => ({ ...prev, setcard_single_image_only: e.target.checked }))
+                          }
+                        />
+                        Generate only one image
+                      </label>
+                    </div>
+                  </div>
                 </div>
                 <p className="settings-note">
-                  Multiple pages are generated automatically if items exceed the grid. Project logo overlay remains enabled.
+                  The item tile size defines detail level. If single image is off, extra pages are generated automatically. Project logo overlay remains enabled.
                 </p>
               </div>
               <div className="settings-two-col">

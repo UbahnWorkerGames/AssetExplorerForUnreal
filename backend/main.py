@@ -1983,6 +1983,7 @@ class SettingsUpdate(BaseModel):
     setcard_size_px: Optional[int] = None
     setcard_items_per_row: Optional[int] = None
     setcard_rows: Optional[int] = None
+    setcard_single_image_only: Optional[bool] = None
     setcard_include_types: Optional[str] = None
     setcard_exclude_types: Optional[str] = None
     generate_embeddings_on_import: Optional[bool] = None
@@ -3117,9 +3118,11 @@ def _pick_asset_image(row: Dict[str, Any]) -> Optional[Path]:
 def _generate_project_setcard(project: Dict[str, Any], settings: Dict[str, Any]) -> List[str]:
     try:
         project_id = project["id"]
-        size_px = _normalize_setcard_int(settings.get("setcard_size_px"), 1024, 128, 8192)
+        tile_px = _normalize_setcard_int(settings.get("setcard_size_px"), 256, 64, 4096)
         cols = _normalize_setcard_int(settings.get("setcard_items_per_row"), 5, 1, 20)
         rows_per_page = _normalize_setcard_int(settings.get("setcard_rows"), 4, 1, 20)
+        single_image_only_raw = str(settings.get("setcard_single_image_only") or "").strip().lower()
+        single_image_only = single_image_only_raw in {"1", "true", "yes", "on"}
         include_types = set(_parse_type_filter(settings.get("setcard_include_types")))
         exclude_types = set(_parse_type_filter(settings.get("setcard_exclude_types")))
         if not include_types:
@@ -3180,13 +3183,20 @@ def _generate_project_setcard(project: Dict[str, Any], settings: Dict[str, Any])
             except Exception:
                 pass
 
-        page_count = max(1, math.ceil(len(images) / items_per_page))
-        gap = max(2, size_px // 512)
-        cell_w = max(1, (size_px - (cols - 1) * gap) // cols)
-        cell_h = max(1, (size_px - (rows_per_page - 1) * gap) // rows_per_page)
+        full_page_count = max(1, math.ceil(len(images) / items_per_page))
+        page_count = 1 if single_image_only else full_page_count
+        gap = max(2, tile_px // 32)
+        grid_w = cols * tile_px + (cols - 1) * gap
+        grid_h = rows_per_page * tile_px + (rows_per_page - 1) * gap
+        title_band = max(26, tile_px // 6)
+        canvas_w = grid_w + gap * 2
+        canvas_h = grid_h + title_band + gap * 2
+        size_px = max(canvas_w, canvas_h)
         font = ImageFont.load_default()
         logo_path = BASE_DIR / "frontend" / "src" / "assets" / "logo64.png"
         output_paths: List[str] = []
+        grid_x = (size_px - grid_w) // 2
+        grid_y = title_band + max(gap, (size_px - title_band - grid_h) // 2)
 
         for page_idx in range(page_count):
             page_images = images[page_idx * items_per_page : (page_idx + 1) * items_per_page]
@@ -3195,10 +3205,10 @@ def _generate_project_setcard(project: Dict[str, Any], settings: Dict[str, Any])
             for idx, img_path in enumerate(page_images):
                 r = idx // cols
                 c = idx % cols
-                x0 = c * (cell_w + gap)
-                y0 = r * (cell_h + gap)
-                x1 = x0 + cell_w
-                y1 = y0 + cell_h
+                x0 = grid_x + c * (tile_px + gap)
+                y0 = grid_y + r * (tile_px + gap)
+                x1 = x0 + tile_px
+                y1 = y0 + tile_px
                 try:
                     with Image.open(img_path) as im:
                         im = im.convert("RGB")
@@ -3212,14 +3222,14 @@ def _generate_project_setcard(project: Dict[str, Any], settings: Dict[str, Any])
                     continue
 
             title = project.get("name") or "Project"
-            page_label = f"{title} ({page_idx + 1}/{page_count})" if page_count > 1 else title
+            page_label = f"{title} ({page_idx + 1}/{full_page_count})" if full_page_count > 1 else title
             draw.text((8, 8), page_label, fill=(240, 240, 240), font=font)
 
             if logo_path.exists():
                 try:
                     with Image.open(logo_path) as logo:
                         logo = logo.convert("RGBA")
-                        logo_size = max(36, min(128, size_px // 16))
+                        logo_size = max(36, min(128, size_px // 18))
                         logo = logo.resize((logo_size, logo_size), Image.LANCZOS)
                         lx = size_px - logo_size - 12
                         ly = size_px - logo_size - 12
@@ -6704,7 +6714,7 @@ def update_settings(payload: SettingsUpdate) -> Dict[str, str]:
     cur = conn.cursor()
     data = payload.dict(exclude_unset=True)
     if "setcard_size_px" in data:
-        data["setcard_size_px"] = _normalize_setcard_int(data.get("setcard_size_px"), 1024, 128, 8192)
+        data["setcard_size_px"] = _normalize_setcard_int(data.get("setcard_size_px"), 256, 64, 4096)
     if "setcard_items_per_row" in data:
         data["setcard_items_per_row"] = _normalize_setcard_int(data.get("setcard_items_per_row"), 5, 1, 20)
     if "setcard_rows" in data:
@@ -6725,6 +6735,7 @@ def update_settings(payload: SettingsUpdate) -> Dict[str, str]:
             "tag_translate_enabled",
             "generate_embeddings_on_import",
             "default_full_project_copy",
+            "setcard_single_image_only",
         }:
             if isinstance(value, bool):
                 value = "true" if value else "false"
@@ -7061,9 +7072,9 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
     else:
         masked["tag_display_limit"] = "0"
     if "setcard_size_px" in masked:
-        masked["setcard_size_px"] = str(_normalize_setcard_int(masked.get("setcard_size_px"), 1024, 128, 8192))
+        masked["setcard_size_px"] = str(_normalize_setcard_int(masked.get("setcard_size_px"), 256, 64, 4096))
     else:
-        masked["setcard_size_px"] = "1024"
+        masked["setcard_size_px"] = "256"
     if "setcard_items_per_row" in masked:
         masked["setcard_items_per_row"] = str(_normalize_setcard_int(masked.get("setcard_items_per_row"), 5, 1, 20))
     else:
@@ -7076,6 +7087,11 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
         masked["setcard_include_types"] = "SkeletalMesh,StaticMesh,Blueprint"
     if "setcard_exclude_types" not in masked:
         masked["setcard_exclude_types"] = ""
+    if "setcard_single_image_only" in masked:
+        raw = str(masked.get("setcard_single_image_only") or "").strip().lower()
+        masked["setcard_single_image_only"] = "true" if raw in {"1", "true", "yes", "on"} else "false"
+    else:
+        masked["setcard_single_image_only"] = "false"
     if "sidebar_width" in masked:
         raw = str(masked.get("sidebar_width") or "").strip()
         masked["sidebar_width"] = raw if raw.isdigit() else ""
