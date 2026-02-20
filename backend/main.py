@@ -7898,6 +7898,18 @@ def asset_exists(hash: str, hash_type: str = "blake3") -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="hash is required")
     column = _resolve_hash_column(hash_type)
     conn = get_db()
+    settings = get_settings(conn)
+    raw_skip = str(settings.get("skip_export_if_on_server") or "").strip().lower()
+    skip_enabled = raw_skip in {"1", "true", "yes", "on"}
+    if not skip_enabled:
+        conn.close()
+        logger.info(
+            "assets/exists hash=%s hash_type=%s exists=%s (forced by skip_export_if_on_server=false)",
+            hash,
+            hash_type,
+            False,
+        )
+        return {"exists": False, "id": None}
     row = fetch_one(conn, f"SELECT id FROM assets WHERE {column} = ? LIMIT 1", (hash,))
     conn.close()
     logger.info("assets/exists hash=%s hash_type=%s exists=%s", hash, hash_type, bool(row))
