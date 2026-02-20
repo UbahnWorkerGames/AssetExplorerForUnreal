@@ -8583,13 +8583,20 @@ def generate_project_setcard(project_id: int, force: bool = Query(False)) -> Dic
         except Exception:
             pass
 
+    def _with_cache_bust(url_value: Optional[str]) -> Optional[str]:
+        if not url_value:
+            return url_value
+        token = int(time.time() * 1000)
+        sep = "&" if "?" in url_value else "?"
+        return f"{url_value}{sep}v={token}"
+
     if out_path.exists() and not force:
         url = _project_screenshot_url_from_path(str(out_path))
         if not url:
             mirrored = _mirror_project_image_to_media(project, out_path, "setcard.png")
             if mirrored:
                 url = _project_screenshot_url_from_path(mirrored)
-        return {"status": "ok", "setcard_url": url}
+        return {"status": "ok", "setcard_url": _with_cache_bust(url)}
 
     created = _generate_project_setcard(project)
     if not created:
@@ -8601,7 +8608,7 @@ def generate_project_setcard(project_id: int, force: bool = Query(False)) -> Dic
         mirrored = _mirror_project_image_to_media(project, out_path if out_path.exists() else created_path, "setcard.png")
         if mirrored:
             url = _project_screenshot_url_from_path(mirrored)
-    return {"status": "ok", "setcard_url": url}
+    return {"status": "ok", "setcard_url": _with_cache_bust(url)}
 
 
 @app.post("/projects/{project_id}/generate-previews")
