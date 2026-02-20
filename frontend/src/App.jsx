@@ -84,9 +84,9 @@ const isTrue = (value) => String(value).toLowerCase() === "true" || value === tr
 const taskLabelMap = {
   embeddings_all: "Rebuild semantic (all)",
   embeddings_project: "Rebuild semantic (project)",
-  tag_project_missing: "Tag missing",
+  tag_project_missing: "AI tag missing",
   tag_project_retag: "Tag all",
-  tag_missing_all: "Tag missing (all)",
+  tag_missing_all: "AI tag missing (all)",
   name_tags_all: "Asset title to tags (all)",
   name_tags_project: "Asset title to tags (project)",
   name_tags_all_missing: "Asset title to tags missing (all)",
@@ -3871,7 +3871,10 @@ function formatSizeGb(bytes) {
                     </div>
                     <div className="project-stats-tags project-action-tags">
                         <div className="project-action-row-group project-action-row-group-local">
-                        <div className="project-action-row-label">
+                        <div
+                          className="project-action-row-label"
+                          title="Runs on your local backend. Actions here can still call configured AI providers."
+                        >
                           <FontAwesomeIcon icon={faHardDrive} /> Local
                         </div>
                         <div className="project-action-row project-action-row-local">
@@ -3881,7 +3884,7 @@ function formatSizeGb(bytes) {
                             onClick={handleTagMissingAllProjects}
                             title="Tag assets across all projects that have never been AI-tagged yet (based on tags_done_at)."
                           >
-                            Tag missing (all)
+                            AI tag missing (all)
                           </button>
                           <button
                             className="btn btn-outline-dark btn-sm"
@@ -4329,12 +4332,15 @@ function formatSizeGb(bytes) {
                                   </button>
                                 </div>
                                 <div className="project-action-row-group project-action-row-group-local">
-                                  <div className="project-action-row-label">
+                                  <div
+                                    className="project-action-row-label"
+                                    title="Runs on your local backend. Actions here can still call configured AI providers."
+                                  >
                                     <FontAwesomeIcon icon={faHardDrive} /> Local
                                   </div>
                                   <div className="project-action-row">
                                     <button className="btn btn-outline-dark btn-sm" onClick={() => handleTagMissing(project.id)} title="Tag assets in this project that have not been AI-tagged yet (based on tags_done_at).">
-                                      Tag missing
+                                      AI tag missing
                                     </button>
                                     <button className="btn btn-outline-dark btn-sm" onClick={() => handleRetagAll(project.id)} title="Regenerate and replace tags for all assets in this project (local processing).">
                                       Tag all
