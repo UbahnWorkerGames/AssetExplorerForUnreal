@@ -348,6 +348,28 @@ body {
   font-size: 14px;
 }
 
+.sidebar-toggle {
+  border: none;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  font-weight: 600;
+  font-size: 14px;
+  color: inherit;
+}
+
+.filter-section-toggle {
+  border: none;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #2f3a4a;
+}
+
 .asset-count {
   font-size: 12px;
   color: #5f5f5f;

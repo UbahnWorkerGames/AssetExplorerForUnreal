@@ -226,6 +226,11 @@ function AssetCard({ asset, project, onSelect, onContextMenu, tileSize, isSelect
     </button>
   );
 }
+const DEFAULT_ASSET_FILTER_PANELS = {
+  filters: true,
+  era: true,
+  projects: true,
+};
 export default function App() {
   const [view, setView] = useState("assets");
   const viewRef = useRef("assets");
@@ -349,6 +354,21 @@ export default function App() {
   const [hasGroqKey, setHasGroqKey] = useState(false);
   const [selectedArtStyles, setSelectedArtStyles] = useState(["regular", "stylized", "low poly"]);
   const [selectedEras, setSelectedEras] = useState([]);
+  const [assetFilterPanels, setAssetFilterPanels] = useState(() => {
+    if (typeof window === "undefined") return DEFAULT_ASSET_FILTER_PANELS;
+    try {
+      const raw = window.localStorage.getItem("ameb_asset_filter_panels");
+      if (!raw) return DEFAULT_ASSET_FILTER_PANELS;
+      const parsed = JSON.parse(raw);
+      return {
+        filters: parsed?.filters !== false,
+        era: parsed?.era !== false,
+        projects: parsed?.projects !== false,
+      };
+    } catch {
+      return DEFAULT_ASSET_FILTER_PANELS;
+    }
+  });
   const [projectAiFilter, setProjectAiFilter] = useState("all");
   const [projectArtStyleFilter, setProjectArtStyleFilter] = useState("__all__");
   const [projectEraFilter, setProjectEraFilter] = useState("__all__");
@@ -697,6 +717,10 @@ export default function App() {
     localStorage.setItem("ameb_project_sort_key", projectSortKey);
     localStorage.setItem("ameb_project_sort_dir", projectSortDir);
   }, [projectSortKey, projectSortDir]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("ameb_asset_filter_panels", JSON.stringify(assetFilterPanels));
+  }, [assetFilterPanels]);
   useEffect(() => {
     if (typeof document === "undefined") return undefined;
     if (!aboutOpen) return undefined;
@@ -2561,6 +2585,9 @@ function formatSizeGb(bytes) {
     if (!Number.isFinite(value) || value <= 0) return "0.00";
     return (value / (1024 * 1024 * 1024)).toFixed(2);
   }
+  function toggleAssetFilterPanel(panelKey) {
+    setAssetFilterPanels((prev) => ({ ...prev, [panelKey]: !prev[panelKey] }));
+  }
   function toggleAllProjects(checked) {
     if (checked) {
       setSelectedProjects(projects.map((project) => String(project.id)));
@@ -2932,7 +2959,16 @@ function formatSizeGb(bytes) {
                 <div className="asset-count">Current size: {tileSize}px</div>
               </div>
               <div className="sidebar-block">
-                <div className="sidebar-title">Filters</div>
+                <button
+                  className="sidebar-toggle"
+                  type="button"
+                  onClick={() => toggleAssetFilterPanel("filters")}
+                  aria-expanded={assetFilterPanels.filters}
+                >
+                  {assetFilterPanels.filters ? "▾" : "▸"} Filters
+                </button>
+                {assetFilterPanels.filters && (
+                <>
                 <div className="filter-group">
                   <div className="filter-label">Type</div>
                   <label className="filter-item">
@@ -3019,107 +3055,129 @@ function formatSizeGb(bytes) {
                   </div>
                 </div>
                 <div className="filter-group">
-                  <div className="filter-label">Era</div>
-                  <label className="filter-item">
-                    <input
-                      type="checkbox"
-                      checked={selectedEras.length === eraOptions.length && eraOptions.length > 0}
-                      onChange={(e) => {
-                        setSelectedEras(e.target.checked ? eraOptions : []);
-                        resetPaging(true, true);
-                      }}
-                    />
-                    Toggle all
-                  </label>
-                  <div className="filter-list">
-                    {eraOptions.length ? (
-                      eraOptions.map((era) => (
-                        <label key={era} className="filter-item">
-                          <input
-                            type="checkbox"
-                            checked={selectedEras.includes(era)}
-                            onChange={() => {
-                              setSelectedEras((prev) =>
-                                prev.includes(era)
-                                  ? prev.filter((value) => value !== era)
-                                  : [...prev, era]
-                              );
-                              resetPaging(true, true);
-                            }}
-                          />
-                          {era}
-                        </label>
-                      ))
-                    ) : (
-                      <div className="asset-count">No eras found</div>
-                    )}
-                  </div>
+                  <button
+                    className="filter-section-toggle"
+                    type="button"
+                    onClick={() => toggleAssetFilterPanel("era")}
+                    aria-expanded={assetFilterPanels.era}
+                  >
+                    {assetFilterPanels.era ? "▾" : "▸"} Era
+                  </button>
+                  {assetFilterPanels.era && (
+                    <>
+                      <label className="filter-item">
+                        <input
+                          type="checkbox"
+                          checked={selectedEras.length === eraOptions.length && eraOptions.length > 0}
+                          onChange={(e) => {
+                            setSelectedEras(e.target.checked ? eraOptions : []);
+                            resetPaging(true, true);
+                          }}
+                        />
+                        Toggle all
+                      </label>
+                      <div className="filter-list">
+                        {eraOptions.length ? (
+                          eraOptions.map((era) => (
+                            <label key={era} className="filter-item">
+                              <input
+                                type="checkbox"
+                                checked={selectedEras.includes(era)}
+                                onChange={() => {
+                                  setSelectedEras((prev) =>
+                                    prev.includes(era)
+                                      ? prev.filter((value) => value !== era)
+                                      : [...prev, era]
+                                  );
+                                  resetPaging(true, true);
+                                }}
+                              />
+                              {era}
+                            </label>
+                          ))
+                        ) : (
+                          <div className="asset-count">No eras found</div>
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
                 <div className="filter-group">
-                  <div className="filter-label">Projects</div>
-                  <input
-                    className="form-control form-control-sm"
-                    placeholder="Filter projects..."
-                    value={projectFilterSearch}
-                    onChange={(e) => setProjectFilterSearch(e.target.value)}
-                  />
-                  <label className="filter-item">
-                    <input
-                      type="checkbox"
-                      checked={selectedProjects.length === projects.length && projects.length > 0}
-                      onChange={(e) => toggleAllProjects(e.target.checked)}
-                    />
-                    Toggle all
-                  </label>
-                  <div className="filter-list">
-                    {projects
-                      .filter((project) => {
-                        const stats = projectStats[project.id] || {};
-                        const total = Number(stats.total_all ?? stats.total ?? 0);
-                        if (showEmptyProjects && total > 0) return false;
-                        if (selectedEras.length && eraOptions.length) {
-                          const era = String(project.project_era || "").trim().toLowerCase();
-                          if (era && !selectedEras.includes(era)) return false;
-                        }
-                        const query = projectFilterSearch.trim().toLowerCase();
-                        if (!query) return true;
-                        const nameMatch = (project.name || "").toLowerCase().includes(query);
-                        const tagMatch = (project.tags || []).some((tag) =>
-                          String(tag || "").toLowerCase().includes(query)
-                        );
-                        return nameMatch || tagMatch;
-                      })
-                      .map((project) => (
-                        <div key={project.id} className="filter-item">
-                          <label className="project-filter-label">
-                            <button
-                              className="icon-btn icon-folder"
-                              type="button"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                handleOpenPreferredProjectPath(project);
-                              }}
-                              title="Open folder"
-                              aria-label="Open folder"
-                            >
-                              <FontAwesomeIcon icon={faFolderOpen} />
-                            </button>
-                            <input
-                              type="checkbox"
-                              checked={selectedProjects.includes(String(project.id))}
-                              onChange={() => toggleProject(project.id)}
-                            />
-                            <span className="project-filter-name" style={{ maxWidth: `${projectNameWrap}ch` }}>
-                              {project.name}
-                            </span>
-                            <span className="filter-meta">
-                              {projectStats[project.id]?.matched ?? 0}/{projectStats[project.id]?.total ?? 0}
-                            </span>
-                          </label>
-                        </div>
-                      ))}
-                  </div>
+                  <button
+                    className="filter-section-toggle"
+                    type="button"
+                    onClick={() => toggleAssetFilterPanel("projects")}
+                    aria-expanded={assetFilterPanels.projects}
+                  >
+                    {assetFilterPanels.projects ? "▾" : "▸"} Projects
+                  </button>
+                  {assetFilterPanels.projects && (
+                    <>
+                      <input
+                        className="form-control form-control-sm"
+                        placeholder="Filter projects..."
+                        value={projectFilterSearch}
+                        onChange={(e) => setProjectFilterSearch(e.target.value)}
+                      />
+                      <label className="filter-item">
+                        <input
+                          type="checkbox"
+                          checked={selectedProjects.length === projects.length && projects.length > 0}
+                          onChange={(e) => toggleAllProjects(e.target.checked)}
+                        />
+                        Toggle all
+                      </label>
+                      <div className="filter-list">
+                        {projects
+                          .filter((project) => {
+                            const stats = projectStats[project.id] || {};
+                            const total = Number(stats.total_all ?? stats.total ?? 0);
+                            if (showEmptyProjects && total > 0) return false;
+                            if (selectedEras.length && eraOptions.length) {
+                              const era = String(project.project_era || "").trim().toLowerCase();
+                              if (era && !selectedEras.includes(era)) return false;
+                            }
+                            const query = projectFilterSearch.trim().toLowerCase();
+                            if (!query) return true;
+                            const nameMatch = (project.name || "").toLowerCase().includes(query);
+                            const tagMatch = (project.tags || []).some((tag) =>
+                              String(tag || "").toLowerCase().includes(query)
+                            );
+                            return nameMatch || tagMatch;
+                          })
+                          .map((project) => (
+                            <div key={project.id} className="filter-item">
+                              <label className="project-filter-label">
+                                <button
+                                  className="icon-btn icon-folder"
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    handleOpenPreferredProjectPath(project);
+                                  }}
+                                  title="Open folder"
+                                  aria-label="Open folder"
+                                >
+                                  <FontAwesomeIcon icon={faFolderOpen} />
+                                </button>
+                                <input
+                                  type="checkbox"
+                                  checked={selectedProjects.includes(String(project.id))}
+                                  onChange={() => toggleProject(project.id)}
+                                />
+                                <span className="project-filter-name" style={{ maxWidth: `${projectNameWrap}ch` }}>
+                                  {project.name}
+                                </span>
+                                <span className="filter-meta">
+                                  {projectStats[project.id]?.matched ?? 0}/{projectStats[project.id]?.total ?? 0}
+                                </span>
+                              </label>
+                            </div>
+                          ))}
+                      </div>
+                    </>
+                  )}
                 </div>
                   <div className="filter-group">
                   <button
@@ -3133,6 +3191,8 @@ function formatSizeGb(bytes) {
                       Refresh list
                   </button>
                   </div>
+                </>
+                )}
                 </div>
               </aside>
               <div className={`asset-main${selectedAssetId ? " detail-open" : ""}`}>
