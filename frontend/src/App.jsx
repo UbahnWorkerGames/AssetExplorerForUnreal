@@ -2538,6 +2538,9 @@ export default function App() {
       const res = await generateProjectSetcard(projectId, true);
       const setcardUrls = Array.isArray(res?.setcard_urls) ? res.setcard_urls : [];
       const firstUrl = setcardUrls[0] || res?.setcard_url || "";
+      if (firstUrl) {
+        setProjectPreview(resolveApiUrl(firstUrl));
+      }
       if (setcardUrls.length > 1) {
         const zipUrl = resolveApiUrl(res?.setcard_zip_url || "");
         toast.info(`Setcards generated (${setcardUrls.length} pages)`);
@@ -2545,9 +2548,6 @@ export default function App() {
           window.open(zipUrl, "_blank", "noopener");
         }
       } else {
-        if (firstUrl) {
-          setProjectPreview(resolveApiUrl(firstUrl));
-        }
         toast.info("Setcard generated");
       }
     } catch (err) {
