@@ -1788,6 +1788,9 @@ export default function App() {
       setProjectStats(statsMap);
       setProjectStatsSummary(statsData.summary || null);
       toast.success("Source sizes refreshed");
+      if (typeof window !== "undefined") {
+        window.setTimeout(() => window.location.reload(), 250);
+      }
     } catch (err) {
       console.error(err);
       toast.error("Failed to refresh source sizes");
