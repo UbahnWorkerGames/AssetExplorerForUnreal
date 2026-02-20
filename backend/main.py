@@ -103,6 +103,17 @@ _log_buffer: "deque[Dict[str, Any]]" = deque(maxlen=500)
 _log_buffer_lock = threading.Lock()
 
 
+def _should_skip_live_log(record: logging.LogRecord, rendered: str) -> bool:
+    logger_name = str(record.name or "")
+    if logger_name != "uvicorn.access":
+        return False
+    msg = rendered.lower()
+    if '"' not in msg:
+        return False
+    image_exts = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".ico", ".bmp", ".avif")
+    return any(ext in msg for ext in image_exts)
+
+
 def _broadcast_event(payload: Dict[str, Any]) -> None:
     data = json.dumps(payload, ensure_ascii=False)
     with _event_lock:
@@ -119,6 +130,8 @@ class _SSELogHandler(logging.Handler):
             rendered = self.format(record)
         except Exception:
             rendered = record.getMessage()
+        if _should_skip_live_log(record, rendered):
+            return
         payload = {
             "type": "log",
             "level": str(record.levelname or "INFO").upper(),
