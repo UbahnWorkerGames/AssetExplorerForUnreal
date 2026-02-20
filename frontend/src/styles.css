@@ -1628,6 +1628,10 @@ body {
   border-color: rgba(255, 255, 255, 0.2);
 }
 
+.btn.btn-outline-dark {
+  color: #fff;
+}
+
 .drop-zone {
   border: 1px dashed #9aa7b8;
   border-radius: 12px;
