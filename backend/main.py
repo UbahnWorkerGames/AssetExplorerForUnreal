@@ -108,6 +108,8 @@ def _should_skip_live_log(record: logging.LogRecord, rendered: str) -> bool:
     if logger_name != "uvicorn.access":
         return False
     msg = rendered.lower()
+    if " /queue/status " in msg:
+        return True
     if '"' not in msg:
         return False
     image_exts = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".ico", ".bmp", ".avif")
@@ -6568,11 +6570,12 @@ def run_project_export_cmd(project_id: int, payload: ProjectExportCmd) -> Dict[s
         ue_cmd,
         str(uproject_path),
         f"-ExecCmds=aeb {game_path}",
-        "-exit",
         "-nop4",
         "-nosplash",
         "-unattended",
     ]
+    if not any(str(arg).strip().lower() == "-exit" for arg in args):
+        args.append("-exit")
     extra_args_raw = (settings.get("ue_cmd_extra_args") or "").strip()
     if extra_args_raw:
         try:
@@ -6582,15 +6585,43 @@ def run_project_export_cmd(project_id: int, payload: ProjectExportCmd) -> Dict[s
 
     if os.name == "nt":
         cmdline = subprocess.list2cmdline(args)
-        subprocess.Popen(
+        proc = subprocess.Popen(
             args,
             cwd=str(work_root),
             creationflags=subprocess.CREATE_NEW_CONSOLE,
         )
         command = cmdline
     else:
-        subprocess.Popen(args, cwd=str(work_root))
+        proc = subprocess.Popen(args, cwd=str(work_root))
         command = " ".join(args)
+
+    project_root_for_cleanup = Path(uproject_path).parent
+
+    def _cleanup_after_export_done(process: subprocess.Popen, cleanup_root: Path) -> None:
+        try:
+            return_code = process.wait()
+            logger.info("Export cmd finished rc=%s root=%s", return_code, cleanup_root)
+        except Exception as exc:
+            logger.warning("Export cmd wait failed: %s", exc)
+            return
+        for folder_name in ["DerivedDataCache", "export", "Intermediate", "Saved"]:
+            target = cleanup_root / folder_name
+            if not target.exists():
+                continue
+            try:
+                if target.is_dir():
+                    shutil.rmtree(target, ignore_errors=False)
+                else:
+                    target.unlink(missing_ok=True)
+                logger.info("Export cleanup removed: %s", target)
+            except Exception as exc:
+                logger.warning("Export cleanup failed for %s: %s", target, exc)
+
+    threading.Thread(
+        target=_cleanup_after_export_done,
+        args=(proc, project_root_for_cleanup),
+        daemon=True,
+    ).start()
 
     logger.info("Export cmd: %s", command)
     return {"status": "started", "command": command, "uproject": str(uproject_path), "game_path": game_path}
