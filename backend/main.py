@@ -3150,8 +3150,6 @@ def _generate_project_setcard(project: Dict[str, Any], settings: Dict[str, Any])
         single_image_only = single_image_only_raw in {"1", "true", "yes", "on"}
         include_types = set(_parse_type_filter(settings.get("setcard_include_types")))
         exclude_types = set(_parse_type_filter(settings.get("setcard_exclude_types")))
-        if not include_types:
-            include_types = set(DEFAULT_SETCARD_INCLUDE_TYPES)
         items_per_page = max(1, cols * rows_per_page)
 
         conn = get_db()
@@ -3219,18 +3217,19 @@ def _generate_project_setcard(project: Dict[str, Any], settings: Dict[str, Any])
         page_count = 1 if single_image_only else full_page_count
         gap = max(2, tile_px // 32)
         grid_w = cols * tile_px + (cols - 1) * gap
-        grid_h = rows_per_page * tile_px + (rows_per_page - 1) * gap
         title_band = max(26, tile_px // 6)
         canvas_w = grid_w + gap * 2
-        canvas_h = grid_h + title_band + gap * 2
         font = ImageFont.load_default()
         logo_path = BASE_DIR / "frontend" / "src" / "assets" / "logo64.png"
         output_paths: List[str] = []
         grid_x = gap
-        grid_y = title_band + gap
 
         for page_idx in range(page_count):
             page_images = images[page_idx * items_per_page : (page_idx + 1) * items_per_page]
+            effective_rows = max(1, min(rows_per_page, math.ceil(len(page_images) / cols)))
+            grid_h = effective_rows * tile_px + (effective_rows - 1) * gap
+            canvas_h = grid_h + title_band + gap * 2
+            grid_y = title_band + gap
             canvas = Image.new("RGB", (canvas_w, canvas_h), (16, 16, 18))
             draw = ImageDraw.Draw(canvas)
             for idx, img_path in enumerate(page_images):
@@ -3304,9 +3303,6 @@ def _parse_type_filter(value: Optional[str]) -> List[str]:
         return []
     tokens = [t.strip().lower() for t in value.replace("|", ",").replace(";", ",").split(",")]
     return [t for t in tokens if t]
-
-
-DEFAULT_SETCARD_INCLUDE_TYPES = {"skeletalmesh", "staticmesh", "blueprint"}
 
 
 def _normalize_setcard_int(value: Any, default: int, min_value: int, max_value: int) -> int:
@@ -7114,8 +7110,13 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
         masked["setcard_rows"] = str(_normalize_setcard_int(masked.get("setcard_rows"), 4, 1, 20))
     else:
         masked["setcard_rows"] = "4"
-    if "setcard_include_types" not in masked:
-        masked["setcard_include_types"] = "SkeletalMesh,StaticMesh,Blueprint"
+    if "setcard_include_types" in masked:
+        legacy = str(masked.get("setcard_include_types") or "").replace(" ", "").lower()
+        # Legacy defaults acted like an implicit hard filter; treat them as "no filter".
+        if legacy in {"skeletalmesh,staticmesh,blueprint", "skeletalmesh,staticmesh,blueprint,material"}:
+            masked["setcard_include_types"] = ""
+    else:
+        masked["setcard_include_types"] = ""
     if "setcard_exclude_types" not in masked:
         masked["setcard_exclude_types"] = ""
     if "setcard_single_image_only" in masked:
