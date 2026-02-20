@@ -84,10 +84,10 @@ const taskLabelMap = {
   tag_project_retag: "Tag all (project)",
   tag_missing_all: "Tag missing (all)",
   tag_retag_all: "Tag all (all)",
-  name_tags_all: "Translate names and add to tags (all)",
-  name_tags_project: "Translate names and add to tags (project)",
-  name_tags_all_missing: "Translate missing names and add to tags (all)",
-  name_tags_project_missing: "Translate missing names and add to tags (project)",
+  name_tags_all: "Generate tags from names (all)",
+  name_tags_project: "Generate tags from names (project)",
+  name_tags_all_missing: "Generate tags from names missing (all)",
+  name_tags_project_missing: "Generate tags from names missing (project)",
   tags_translate_all: "Translate tags (all)",
   tags_translate_project: "Translate tags (project)",
   tags_translate_all_missing: "Translate tags missing (all)",
@@ -670,8 +670,8 @@ export default function App() {
     const raw = String(settings.tag_language || "").trim();
     return raw || "english";
   }, [settings.tag_language]);
-  const assetTitleAddTagLabel = `Translate names to ${tagLanguageLabel} and add to tags`;
-  const assetTitleAddTagMissingLabel = `Translate missing names to ${tagLanguageLabel} and add to tags`;
+  const assetTitleAddTagLabel = `Generate tags from names in ${tagLanguageLabel}`;
+  const assetTitleAddTagMissingLabel = `Generate missing tags from names in ${tagLanguageLabel}`;
   const tagBatchDeferredOnRestart = useMemo(() => {
     const provider = String(settings.provider || "").toLowerCase();
     const batchProvider = provider === "openai" || provider === "groq";
