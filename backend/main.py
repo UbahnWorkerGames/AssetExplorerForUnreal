@@ -3215,26 +3215,28 @@ def _generate_project_setcard(project: Dict[str, Any], settings: Dict[str, Any])
 
         full_page_count = max(1, math.ceil(len(images) / items_per_page))
         gap = max(2, tile_px // 32)
-        grid_w = cols * tile_px + (cols - 1) * gap
         title_band = max(26, tile_px // 6)
-        canvas_w = grid_w + gap * 2
         font = ImageFont.load_default()
         logo_path = BASE_DIR / "frontend" / "src" / "assets" / "logo64.png"
         output_paths: List[str] = []
-        grid_x = gap
 
         def _render_setcard(page_images: List[Path], page_label: str, file_name: str) -> Optional[str]:
             if not page_images:
                 return None
-            effective_rows = max(1, math.ceil(len(page_images) / cols))
+            render_cols = cols if len(page_images) > cols else len(page_images)
+            render_cols = max(1, render_cols)
+            effective_rows = max(1, math.ceil(len(page_images) / render_cols))
+            grid_w = render_cols * tile_px + (render_cols - 1) * gap
             grid_h = effective_rows * tile_px + (effective_rows - 1) * gap
+            canvas_w = grid_w + gap * 2
             canvas_h = grid_h + title_band + gap * 2
+            grid_x = gap
             grid_y = title_band + gap
             canvas = Image.new("RGB", (canvas_w, canvas_h), (16, 16, 18))
             draw = ImageDraw.Draw(canvas)
             for idx, img_path in enumerate(page_images):
-                r = idx // cols
-                c = idx % cols
+                r = idx // render_cols
+                c = idx % render_cols
                 x0 = grid_x + c * (tile_px + gap)
                 y0 = grid_y + r * (tile_px + gap)
                 x1 = x0 + tile_px
@@ -3262,8 +3264,8 @@ def _generate_project_setcard(project: Dict[str, Any], settings: Dict[str, Any])
                         logo_size = min(logo_size, max(24, tile_px - inset * 2))
                         logo = logo.resize((logo_size, logo_size), Image.LANCZOS)
                         last_idx = len(page_images) - 1
-                        last_r = last_idx // cols
-                        last_c = last_idx % cols
+                        last_r = last_idx // render_cols
+                        last_c = last_idx % render_cols
                         last_x0 = grid_x + last_c * (tile_px + gap)
                         last_y0 = grid_y + last_r * (tile_px + gap)
                         lx = last_x0 + tile_px - logo_size - inset
