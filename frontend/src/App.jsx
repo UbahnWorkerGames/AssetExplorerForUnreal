@@ -4320,6 +4320,13 @@ function formatSizeGb(bytes) {
                                       Re-export via UE Cmd
                                     </button>
                                   )}
+                                  <button
+                                    className="btn btn-outline-dark btn-sm"
+                                    onClick={() => handleRegenerateProjectEmbeddings(project.id)}
+                                    title="Rebuild semantic embeddings for assets in this project."
+                                  >
+                                    Rebuild semantic
+                                  </button>
                                 </div>
                                 <div className="project-action-row-group project-action-row-group-local">
                                   <div className="project-action-row-label">
@@ -4331,13 +4338,6 @@ function formatSizeGb(bytes) {
                                     </button>
                                     <button className="btn btn-outline-dark btn-sm" onClick={() => handleRetagAll(project.id)} title="Regenerate and replace tags for all assets in this project (local processing).">
                                       Tag all
-                                    </button>
-                                    <button
-                                      className="btn btn-outline-dark btn-sm"
-                                      onClick={() => handleRegenerateProjectEmbeddings(project.id)}
-                                      title="Rebuild semantic embeddings for assets in this project."
-                                    >
-                                      Rebuild semantic
                                     </button>
                                     <button
                                       className="btn btn-outline-dark btn-sm"
