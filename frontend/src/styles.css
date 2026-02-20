@@ -668,6 +668,7 @@ body {
   left: 16px;
   bottom: 14px;
   z-index: 1700;
+  color: #fff;
 }
 
 .live-console {
@@ -707,6 +708,10 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.live-console .btn.btn-outline-dark {
+  color: #fff;
 }
 
 .live-console-level {

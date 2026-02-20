@@ -2886,7 +2886,13 @@ function formatSizeGb(bytes) {
     );
   }, [liveConsoleLines, liveConsoleLevel]);
   return (
-    <div className="app-shell" style={{ "--sidebar-width": `${settings.sidebar_width || 280}px` }}>
+    <div
+      className="app-shell"
+      style={{
+        "--sidebar-width": `${settings.sidebar_width || 280}px`,
+        paddingBottom: showLiveConsole ? "calc(34vh + 8px)" : undefined,
+      }}
+    >
       <nav className="navbar navbar-dark bg-dark navbar-expand">
         <div className="container-fluid">
           <div className="navbar-brand navbar-brand-logo" onClick={() => handleViewClick("assets")}>
