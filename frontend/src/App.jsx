@@ -617,7 +617,7 @@ export default function App() {
     default_full_project_copy: false,
     tag_include_types: "",
     tag_exclude_types: "",
-    setcard_size_px: 1080,
+    setcard_size_px: 1024,
     setcard_items_per_row: 5,
     setcard_rows: 4,
     setcard_include_types: "",
@@ -2284,7 +2284,7 @@ export default function App() {
         if (Number.isNaN(parsedSetcardSize)) {
           delete payload.setcard_size_px;
         } else {
-          payload.setcard_size_px = Math.max(256, Math.min(4096, parsedSetcardSize));
+          payload.setcard_size_px = Math.max(128, Math.min(8192, parsedSetcardSize));
         }
       }
       if (payload.setcard_items_per_row !== undefined && payload.setcard_items_per_row !== "") {
@@ -5770,11 +5770,11 @@ function formatSizeGb(bytes) {
                       <input
                         className="form-control"
                         type="number"
-                        min="256"
-                        max="4096"
-                        step="64"
-                        title="Final setcard image size (square)."
-                        value={settings.setcard_size_px ?? 1080}
+                        min="128"
+                        max="8192"
+                        step="1"
+                        title="Final setcard canvas size in pixels (square 1:1)."
+                        value={settings.setcard_size_px ?? 1024}
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, setcard_size_px: Number(e.target.value || 0) }))
                         }

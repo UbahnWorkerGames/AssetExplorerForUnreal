@@ -3117,11 +3117,13 @@ def _pick_asset_image(row: Dict[str, Any]) -> Optional[Path]:
 def _generate_project_setcard(project: Dict[str, Any], settings: Dict[str, Any]) -> List[str]:
     try:
         project_id = project["id"]
-        size_px = _normalize_setcard_int(settings.get("setcard_size_px"), 1080, 256, 4096)
+        size_px = _normalize_setcard_int(settings.get("setcard_size_px"), 1024, 128, 8192)
         cols = _normalize_setcard_int(settings.get("setcard_items_per_row"), 5, 1, 20)
         rows_per_page = _normalize_setcard_int(settings.get("setcard_rows"), 4, 1, 20)
         include_types = set(_parse_type_filter(settings.get("setcard_include_types")))
         exclude_types = set(_parse_type_filter(settings.get("setcard_exclude_types")))
+        if not include_types:
+            include_types = set(DEFAULT_SETCARD_INCLUDE_TYPES)
         items_per_page = max(1, cols * rows_per_page)
 
         conn = get_db()
@@ -3261,6 +3263,9 @@ def _parse_type_filter(value: Optional[str]) -> List[str]:
         return []
     tokens = [t.strip().lower() for t in value.replace("|", ",").replace(";", ",").split(",")]
     return [t for t in tokens if t]
+
+
+DEFAULT_SETCARD_INCLUDE_TYPES = {"skeletalmesh", "staticmesh", "blueprint"}
 
 
 def _normalize_setcard_int(value: Any, default: int, min_value: int, max_value: int) -> int:
@@ -6699,7 +6704,7 @@ def update_settings(payload: SettingsUpdate) -> Dict[str, str]:
     cur = conn.cursor()
     data = payload.dict(exclude_unset=True)
     if "setcard_size_px" in data:
-        data["setcard_size_px"] = _normalize_setcard_int(data.get("setcard_size_px"), 1080, 256, 4096)
+        data["setcard_size_px"] = _normalize_setcard_int(data.get("setcard_size_px"), 1024, 128, 8192)
     if "setcard_items_per_row" in data:
         data["setcard_items_per_row"] = _normalize_setcard_int(data.get("setcard_items_per_row"), 5, 1, 20)
     if "setcard_rows" in data:
@@ -7056,9 +7061,9 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
     else:
         masked["tag_display_limit"] = "0"
     if "setcard_size_px" in masked:
-        masked["setcard_size_px"] = str(_normalize_setcard_int(masked.get("setcard_size_px"), 1080, 256, 4096))
+        masked["setcard_size_px"] = str(_normalize_setcard_int(masked.get("setcard_size_px"), 1024, 128, 8192))
     else:
-        masked["setcard_size_px"] = "1080"
+        masked["setcard_size_px"] = "1024"
     if "setcard_items_per_row" in masked:
         masked["setcard_items_per_row"] = str(_normalize_setcard_int(masked.get("setcard_items_per_row"), 5, 1, 20))
     else:
@@ -7068,7 +7073,7 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
     else:
         masked["setcard_rows"] = "4"
     if "setcard_include_types" not in masked:
-        masked["setcard_include_types"] = ""
+        masked["setcard_include_types"] = "SkeletalMesh,StaticMesh,Blueprint"
     if "setcard_exclude_types" not in masked:
         masked["setcard_exclude_types"] = ""
     if "sidebar_width" in masked:
