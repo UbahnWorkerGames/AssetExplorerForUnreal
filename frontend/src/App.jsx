@@ -2282,6 +2282,15 @@ export default function App() {
       toast.error("Open folder failed");
     }
   }
+  async function handleOpenPreferredProjectPath(project) {
+    toast.info("Opening preferred folder...");
+    try {
+      await openProject(project.id, "auto");
+    } catch (err) {
+      console.error(err);
+      toast.error("Open preferred folder failed");
+    }
+  }
   async function handleOpenProjectSource(project) {
     toast.info("Opening source folder...");
     try {
@@ -3086,8 +3095,12 @@ function formatSizeGb(bytes) {
                             <button
                               className="icon-btn icon-folder"
                               type="button"
-                              onClick={() => handleOpenProject(project)}
-                              title="Open folder"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                handleOpenPreferredProjectPath(project);
+                              }}
+                              title="Open preferred folder (uses source mode)"
                               aria-label="Open folder"
                             >
                               <FontAwesomeIcon icon={faFolderOpen} />
@@ -3102,6 +3115,33 @@ function formatSizeGb(bytes) {
                             </span>
                             <span className="filter-meta">
                               {projectStats[project.id]?.matched ?? 0}/{projectStats[project.id]?.total ?? 0}
+                            </span>
+                            <span className="project-meta-value">
+                              <button
+                                className={`btn btn-outline-dark btn-xs ${((project.source_preference || "external").toLowerCase() === "external") ? "active" : ""}`}
+                                type="button"
+                                title="Prefer external source path for export/open source decisions."
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  handleSetSourcePreference(project.id, "external");
+                                }}
+                              >
+                                External
+                              </button>
+                              {" "}
+                              <button
+                                className={`btn btn-outline-dark btn-xs ${((project.source_preference || "external").toLowerCase() === "internal") ? "active" : ""}`}
+                                type="button"
+                                title="Prefer internal project directory for export/open source decisions."
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  handleSetSourcePreference(project.id, "internal");
+                                }}
+                              >
+                                Internal
+                              </button>
                             </span>
                           </label>
                         </div>
