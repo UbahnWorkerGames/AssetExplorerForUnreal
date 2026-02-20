@@ -84,10 +84,10 @@ const taskLabelMap = {
   tag_project_retag: "Tag all (project)",
   tag_missing_all: "Tag missing (all)",
   tag_retag_all: "Tag all (all)",
-  name_tags_all: "Name -> tags (LLM, all)",
-  name_tags_project: "Name -> tags (LLM, project)",
-  name_tags_all_missing: "Name -> tags missing (LLM, all)",
-  name_tags_project_missing: "Name -> tags missing (LLM, project)",
+  name_tags_all: "Asset title -> add [lang] tag (all)",
+  name_tags_project: "Asset title -> add [lang] tag (project)",
+  name_tags_all_missing: "Asset title missing -> add [lang] tag (all)",
+  name_tags_project_missing: "Asset title missing -> add [lang] tag (project)",
   tags_translate_all: "Translate tags (all)",
   tags_translate_project: "Translate tags (project)",
   tags_translate_all_missing: "Translate tags missing (all)",
@@ -652,6 +652,15 @@ export default function App() {
     if (activeProviderLabel === "OpenAI") return "OpenAI";
     return `AI (${activeProviderLabel})`;
   }, [activeProviderLabel]);
+  const tagLanguageFlag = useMemo(() => {
+    const lang = String(settings.tag_language || "english").toLowerCase();
+    if (lang === "german") return "🇩🇪";
+    if (lang === "spanish") return "🇪🇸";
+    if (lang === "french") return "🇫🇷";
+    return "🇬🇧";
+  }, [settings.tag_language]);
+  const assetTitleAddTagLabel = `Asset title -> add ${tagLanguageFlag} tag`;
+  const assetTitleAddTagMissingLabel = `Asset title missing -> add ${tagLanguageFlag} tag`;
   const tagBatchDeferredOnRestart = useMemo(() => {
     const provider = String(settings.provider || "").toLowerCase();
     const batchProvider = provider === "openai" || provider === "groq";
@@ -3860,7 +3869,7 @@ function formatSizeGb(bytes) {
                             disabled={!llmReady}
                             title={withLlmTitle("Use LLM to derive tags from asset names for all projects and append them to tags.")}
                           >
-                          Name -&gt; tags (all)
+                          {`${assetTitleAddTagLabel} (all)`}
                           </button>
                           <button
                             className="btn btn-outline-dark btn-sm"
@@ -3869,7 +3878,7 @@ function formatSizeGb(bytes) {
                             disabled={!llmReady}
                             title={withLlmTitle("Use LLM to derive tags from asset names only where this action has not run yet (name_translate_tags_done_at missing).")}
                           >
-                          Name -&gt; tags missing (all)
+                          {`${assetTitleAddTagMissingLabel} (all)`}
                           </button>
                           <button
                             className="btn btn-outline-dark btn-sm"
@@ -4305,7 +4314,7 @@ function formatSizeGb(bytes) {
                                       disabled={!llmReady}
                                       title={withLlmTitle("Use LLM to derive tags from asset names for all assets in this project and append them to tags.")}
                                     >
-                                      Name -&gt; tags
+                                      {assetTitleAddTagLabel}
                                     </button>
                                     <button
                                       className="btn btn-outline-dark btn-sm"
@@ -4314,7 +4323,7 @@ function formatSizeGb(bytes) {
                                       disabled={!llmReady}
                                       title={withLlmTitle("Use LLM to derive tags from asset names only where this action has not run yet in this project (name_translate_tags_done_at missing).")}
                                     >
-                                      Name -&gt; tags missing
+                                      {assetTitleAddTagMissingLabel}
                                     </button>
                                     <button
                                       className="btn btn-outline-dark btn-sm"
