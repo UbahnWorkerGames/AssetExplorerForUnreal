@@ -3218,6 +3218,7 @@ def _generate_project_setcard(project: Dict[str, Any], settings: Dict[str, Any])
         gap = max(2, tile_px // 32)
         grid_w = cols * tile_px + (cols - 1) * gap
         title_band = max(26, tile_px // 6)
+        footer_band = max(16, tile_px // 2)
         canvas_w = grid_w + gap * 2
         font = ImageFont.load_default()
         logo_path = BASE_DIR / "frontend" / "src" / "assets" / "logo64.png"
@@ -3228,7 +3229,7 @@ def _generate_project_setcard(project: Dict[str, Any], settings: Dict[str, Any])
             page_images = images[page_idx * items_per_page : (page_idx + 1) * items_per_page]
             effective_rows = max(1, min(rows_per_page, math.ceil(len(page_images) / cols)))
             grid_h = effective_rows * tile_px + (effective_rows - 1) * gap
-            canvas_h = grid_h + title_band + gap * 2
+            canvas_h = grid_h + title_band + footer_band + gap * 2
             grid_y = title_band + gap
             canvas = Image.new("RGB", (canvas_w, canvas_h), (16, 16, 18))
             draw = ImageDraw.Draw(canvas)
@@ -3259,10 +3260,10 @@ def _generate_project_setcard(project: Dict[str, Any], settings: Dict[str, Any])
                 try:
                     with Image.open(logo_path) as logo:
                         logo = logo.convert("RGBA")
-                        logo_size = max(36, min(128, min(canvas_w, canvas_h) // 18))
+                        logo_size = max(48, min(192, int(tile_px * 0.45)))
                         logo = logo.resize((logo_size, logo_size), Image.LANCZOS)
                         lx = canvas_w - logo_size - 12
-                        ly = canvas_h - logo_size - 12
+                        ly = title_band + gap + grid_h + max(4, (footer_band - logo_size) // 2)
                         canvas.paste(logo, (lx, ly), logo)
                 except Exception:
                     pass
