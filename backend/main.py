@@ -1980,6 +1980,11 @@ class SettingsUpdate(BaseModel):
     tag_batch_project_concurrency: Optional[int] = None
     tag_translate_enabled: Optional[bool] = None
     tag_display_limit: Optional[int] = None
+    setcard_size_px: Optional[int] = None
+    setcard_items_per_row: Optional[int] = None
+    setcard_rows: Optional[int] = None
+    setcard_include_types: Optional[str] = None
+    setcard_exclude_types: Optional[str] = None
     generate_embeddings_on_import: Optional[bool] = None
     default_full_project_copy: Optional[bool] = None
     sidebar_width: Optional[int] = None
@@ -3109,9 +3114,16 @@ def _pick_asset_image(row: Dict[str, Any]) -> Optional[Path]:
 
 
 
-def _generate_project_setcard(project: Dict[str, Any], width: int = 1920, height: int = 1080) -> Optional[str]:
+def _generate_project_setcard(project: Dict[str, Any], settings: Dict[str, Any]) -> List[str]:
     try:
         project_id = project["id"]
+        size_px = _normalize_setcard_int(settings.get("setcard_size_px"), 1080, 256, 4096)
+        cols = _normalize_setcard_int(settings.get("setcard_items_per_row"), 4, 1, 20)
+        rows_per_page = _normalize_setcard_int(settings.get("setcard_rows"), 4, 1, 20)
+        include_types = set(_parse_type_filter(settings.get("setcard_include_types")))
+        exclude_types = set(_parse_type_filter(settings.get("setcard_exclude_types")))
+        items_per_page = max(1, cols * rows_per_page)
+
         conn = get_db()
         rows = fetch_all(
             conn,
@@ -3122,11 +3134,12 @@ def _generate_project_setcard(project: Dict[str, Any], width: int = 1920, height
         conn.close()
 
         images: List[Path] = []
-        type_counts: Dict[str, int] = {}
         for row in rows:
-            asset_type = (row.get("type") or "").strip()
-            if asset_type:
-                type_counts[asset_type] = type_counts.get(asset_type, 0) + 1
+            asset_type_lc = str(row.get("type") or "").strip().lower()
+            if include_types and asset_type_lc not in include_types:
+                continue
+            if exclude_types and asset_type_lc in exclude_types:
+                continue
             rel = (
                 row.get("detail_image")
                 or row.get("full_image")
@@ -3142,7 +3155,6 @@ def _generate_project_setcard(project: Dict[str, Any], width: int = 1920, height
                     meta = {}
                 preview_files = meta.get("preview_files") or meta.get("frames") or []
                 if isinstance(preview_files, list) and preview_files:
-                    # frames might be list of dicts
                     if isinstance(preview_files[0], dict):
                         rel = preview_files[0].get("file")
                     else:
@@ -3154,68 +3166,74 @@ def _generate_project_setcard(project: Dict[str, Any], width: int = 1920, height
                 images.append(img_path)
 
         if not images:
-            return None
-
-        canvas = Image.new("RGB", (width, height), (16, 16, 18))
-        draw = ImageDraw.Draw(canvas)
-        font = ImageFont.load_default()
-
-        # tight grid over full canvas
-        gap = 2
-        count = len(images)
-        cols = max(1, math.ceil(math.sqrt(count * width / height)))
-        rows_grid = max(1, math.ceil(count / cols))
-        cell_w = max(1, (width - (cols - 1) * gap) // cols)
-        cell_h = max(1, (height - (rows_grid - 1) * gap) // rows_grid)
-
-        for idx, img_path in enumerate(images):
-            r = idx // cols
-            c = idx % cols
-            if r >= rows_grid:
-                break
-            x0 = c * (cell_w + gap)
-            y0 = r * (cell_h + gap)
-            x1 = x0 + cell_w
-            y1 = y0 + cell_h
-            try:
-                with Image.open(img_path) as im:
-                    im = im.convert("RGB")
-                    im.thumbnail((x1 - x0, y1 - y0), Image.LANCZOS)
-                    tile = Image.new("RGB", (x1 - x0, y1 - y0), (24, 24, 26))
-                    tx = (tile.width - im.width) // 2
-                    ty = (tile.height - im.height) // 2
-                    tile.paste(im, (tx, ty))
-                    canvas.paste(tile, (x0, y0))
-            except Exception:
-                continue
-
-        # optional small title overlay (top-left)
-        title = project.get("name") or "Project"
-        draw.text((8, 8), title, fill=(240, 240, 240), font=font)
-
-        # overlay logo (bottom-right)
-        logo_path = BASE_DIR / "frontend" / "src" / "assets" / "logo64.png"
-        if logo_path.exists():
-            try:
-                with Image.open(logo_path) as logo:
-                    logo = logo.convert("RGBA")
-                    size = 64
-                    logo = logo.resize((size, size), Image.LANCZOS)
-                    x = width - size - 12
-                    y = height - size - 12
-                    canvas.paste(logo, (x, y), logo)
-            except Exception:
-                pass
+            return []
 
         folder_path = Path(project.get("folder_path") or "")
         if not folder_path:
-            return None
-        out_path = folder_path / "setcard.png"
-        canvas.save(out_path, "PNG")
-        return str(out_path)
+            return []
+
+        for stale in folder_path.glob("setcard*.png"):
+            try:
+                stale.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        page_count = max(1, math.ceil(len(images) / items_per_page))
+        gap = max(2, size_px // 512)
+        cell_w = max(1, (size_px - (cols - 1) * gap) // cols)
+        cell_h = max(1, (size_px - (rows_per_page - 1) * gap) // rows_per_page)
+        font = ImageFont.load_default()
+        logo_path = BASE_DIR / "frontend" / "src" / "assets" / "logo64.png"
+        output_paths: List[str] = []
+
+        for page_idx in range(page_count):
+            page_images = images[page_idx * items_per_page : (page_idx + 1) * items_per_page]
+            canvas = Image.new("RGB", (size_px, size_px), (16, 16, 18))
+            draw = ImageDraw.Draw(canvas)
+            for idx, img_path in enumerate(page_images):
+                r = idx // cols
+                c = idx % cols
+                x0 = c * (cell_w + gap)
+                y0 = r * (cell_h + gap)
+                x1 = x0 + cell_w
+                y1 = y0 + cell_h
+                try:
+                    with Image.open(img_path) as im:
+                        im = im.convert("RGB")
+                        im.thumbnail((x1 - x0, y1 - y0), Image.LANCZOS)
+                        tile = Image.new("RGB", (x1 - x0, y1 - y0), (24, 24, 26))
+                        tx = (tile.width - im.width) // 2
+                        ty = (tile.height - im.height) // 2
+                        tile.paste(im, (tx, ty))
+                        canvas.paste(tile, (x0, y0))
+                except Exception:
+                    continue
+
+            title = project.get("name") or "Project"
+            page_label = f"{title} ({page_idx + 1}/{page_count})" if page_count > 1 else title
+            draw.text((8, 8), page_label, fill=(240, 240, 240), font=font)
+
+            if logo_path.exists():
+                try:
+                    with Image.open(logo_path) as logo:
+                        logo = logo.convert("RGBA")
+                        logo_size = max(36, min(128, size_px // 16))
+                        logo = logo.resize((logo_size, logo_size), Image.LANCZOS)
+                        lx = size_px - logo_size - 12
+                        ly = size_px - logo_size - 12
+                        canvas.paste(logo, (lx, ly), logo)
+                except Exception:
+                    pass
+
+            file_name = "setcard.png" if page_idx == 0 else f"setcard_{page_idx + 1:02d}.png"
+            out_path = folder_path / file_name
+            canvas.save(out_path, "PNG")
+            output_paths.append(str(out_path))
+
+        return output_paths
     except Exception as exc:
         logger.error("Setcard generation failed: %s", exc)
-        return None
+        return []
 
 
 
@@ -3243,6 +3261,18 @@ def _parse_type_filter(value: Optional[str]) -> List[str]:
         return []
     tokens = [t.strip().lower() for t in value.replace("|", ",").replace(";", ",").split(",")]
     return [t for t in tokens if t]
+
+
+def _normalize_setcard_int(value: Any, default: int, min_value: int, max_value: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    if parsed < min_value:
+        return min_value
+    if parsed > max_value:
+        return max_value
+    return parsed
 
 
 def _clean_asset_name(name: str) -> str:
@@ -6668,6 +6698,12 @@ def update_settings(payload: SettingsUpdate) -> Dict[str, str]:
     conn = get_db()
     cur = conn.cursor()
     data = payload.dict(exclude_unset=True)
+    if "setcard_size_px" in data:
+        data["setcard_size_px"] = _normalize_setcard_int(data.get("setcard_size_px"), 1080, 256, 4096)
+    if "setcard_items_per_row" in data:
+        data["setcard_items_per_row"] = _normalize_setcard_int(data.get("setcard_items_per_row"), 4, 1, 20)
+    if "setcard_rows" in data:
+        data["setcard_rows"] = _normalize_setcard_int(data.get("setcard_rows"), 4, 1, 20)
     if "tag_translation_language" in data and data.get("tag_translation_language"):
         data["tag_language"] = data.get("tag_translation_language")
         data.pop("tag_translation_language", None)
@@ -7019,6 +7055,22 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
             masked["tag_display_limit"] = "0"
     else:
         masked["tag_display_limit"] = "0"
+    if "setcard_size_px" in masked:
+        masked["setcard_size_px"] = str(_normalize_setcard_int(masked.get("setcard_size_px"), 1080, 256, 4096))
+    else:
+        masked["setcard_size_px"] = "1080"
+    if "setcard_items_per_row" in masked:
+        masked["setcard_items_per_row"] = str(_normalize_setcard_int(masked.get("setcard_items_per_row"), 4, 1, 20))
+    else:
+        masked["setcard_items_per_row"] = "4"
+    if "setcard_rows" in masked:
+        masked["setcard_rows"] = str(_normalize_setcard_int(masked.get("setcard_rows"), 4, 1, 20))
+    else:
+        masked["setcard_rows"] = "4"
+    if "setcard_include_types" not in masked:
+        masked["setcard_include_types"] = ""
+    if "setcard_exclude_types" not in masked:
+        masked["setcard_exclude_types"] = ""
     if "sidebar_width" in masked:
         raw = str(masked.get("sidebar_width") or "").strip()
         masked["sidebar_width"] = raw if raw.isdigit() else ""
@@ -8566,6 +8618,7 @@ def generate_asset_tags(asset_id: int) -> Dict[str, Any]:
 def generate_project_setcard(project_id: int, force: bool = Query(False)) -> Dict[str, Any]:
     conn = get_db()
     project = fetch_one(conn, "SELECT * FROM projects WHERE id = ?", (project_id,))
+    settings = get_settings(conn)
     conn.close()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -8574,15 +8627,6 @@ def generate_project_setcard(project_id: int, force: bool = Query(False)) -> Dic
     if not folder_path or not folder_path.exists():
         raise HTTPException(status_code=404, detail="Folder not found")
 
-    out_path = folder_path / "setcard.png"
-    # Always keep a physical setcard file in the project directory.
-    def _ensure_project_setcard(source: Path) -> None:
-        try:
-            if source.resolve() != out_path.resolve() and source.exists():
-                shutil.copy2(source, out_path)
-        except Exception:
-            pass
-
     def _with_cache_bust(url_value: Optional[str]) -> Optional[str]:
         if not url_value:
             return url_value
@@ -8590,25 +8634,58 @@ def generate_project_setcard(project_id: int, force: bool = Query(False)) -> Dic
         sep = "&" if "?" in url_value else "?"
         return f"{url_value}{sep}v={token}"
 
-    if out_path.exists() and not force:
-        url = _project_screenshot_url_from_path(str(out_path))
-        if not url:
-            mirrored = _mirror_project_image_to_media(project, out_path, "setcard.png")
-            if mirrored:
-                url = _project_screenshot_url_from_path(mirrored)
-        return {"status": "ok", "setcard_url": _with_cache_bust(url)}
+    def _setcard_files() -> List[Path]:
+        files = sorted(folder_path.glob("setcard*.png"))
+        if not files:
+            return []
+        files.sort(key=lambda p: (0 if p.name == "setcard.png" else 1, p.name))
+        return files
 
-    created = _generate_project_setcard(project)
+    def _build_response(files: List[Path]) -> Dict[str, Any]:
+        urls: List[str] = []
+        for source in files:
+            source_url = _project_screenshot_url_from_path(str(source))
+            if not source_url:
+                mirrored = _mirror_project_image_to_media(project, source, source.name)
+                if mirrored:
+                    source_url = _project_screenshot_url_from_path(mirrored)
+            if source_url:
+                urls.append(str(_with_cache_bust(source_url)))
+
+        zip_url = ""
+        if files:
+            zip_path = folder_path / "setcards.zip"
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                for f in files:
+                    if f.exists():
+                        zf.write(f, f.name)
+            zip_url = _project_screenshot_url_from_path(str(zip_path))
+            if not zip_url:
+                mirrored_zip = _mirror_project_image_to_media(project, zip_path, "setcards.zip")
+                if mirrored_zip:
+                    zip_url = _project_screenshot_url_from_path(mirrored_zip)
+            zip_url = str(_with_cache_bust(zip_url)) if zip_url else ""
+
+        first = urls[0] if urls else ""
+        return {
+            "status": "ok",
+            "setcard_url": first,
+            "setcard_urls": urls,
+            "setcard_zip_url": zip_url,
+            "setcard_count": len(urls),
+        }
+
+    if not force:
+        existing = _setcard_files()
+        if existing:
+            return _build_response(existing)
+
+    created = _generate_project_setcard(project, settings)
     if not created:
         raise HTTPException(status_code=400, detail="Setcard generation failed: no preview images found")
-    created_path = Path(created)
-    _ensure_project_setcard(created_path)
-    url = _project_screenshot_url_from_path(str(out_path))
-    if not url:
-        mirrored = _mirror_project_image_to_media(project, out_path if out_path.exists() else created_path, "setcard.png")
-        if mirrored:
-            url = _project_screenshot_url_from_path(mirrored)
-    return {"status": "ok", "setcard_url": _with_cache_bust(url)}
+
+    created_files = [Path(p) for p in created if p]
+    return _build_response(created_files)
 
 
 @app.post("/projects/{project_id}/generate-previews")

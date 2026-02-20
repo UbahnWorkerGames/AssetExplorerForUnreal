@@ -298,6 +298,8 @@ export default function App() {
   const [editScreenshotFile, setEditScreenshotFile] = useState(null);
   const [settingsTagIncludeTypes, setSettingsTagIncludeTypes] = useState([]);
   const [settingsTagExcludeTypes, setSettingsTagExcludeTypes] = useState([]);
+  const [settingsSetcardIncludeTypes, setSettingsSetcardIncludeTypes] = useState([]);
+  const [settingsSetcardExcludeTypes, setSettingsSetcardExcludeTypes] = useState([]);
   const [settingsExportIncludeTypes, setSettingsExportIncludeTypes] = useState([]);
   const [settingsExportExcludeTypes, setSettingsExportExcludeTypes] = useState([]);
   const [assetTypeCatalog, setAssetTypeCatalog] = useState([]);
@@ -615,6 +617,11 @@ export default function App() {
     default_full_project_copy: false,
     tag_include_types: "",
     tag_exclude_types: "",
+    setcard_size_px: 1080,
+    setcard_items_per_row: 4,
+    setcard_rows: 4,
+    setcard_include_types: "",
+    setcard_exclude_types: "",
     tag_missing_min_tags: 1,
     tag_use_batch_mode: false,
     tag_batch_max_assets: 500,
@@ -1137,6 +1144,24 @@ export default function App() {
           clean.tag_image_quality = parsedQuality;
         }
       }
+      if (clean.setcard_size_px !== undefined && clean.setcard_size_px !== "") {
+        const parsedSetcardSize = Number(clean.setcard_size_px);
+        if (!Number.isNaN(parsedSetcardSize)) {
+          clean.setcard_size_px = parsedSetcardSize;
+        }
+      }
+      if (clean.setcard_items_per_row !== undefined && clean.setcard_items_per_row !== "") {
+        const parsedSetcardCols = Number(clean.setcard_items_per_row);
+        if (!Number.isNaN(parsedSetcardCols)) {
+          clean.setcard_items_per_row = parsedSetcardCols;
+        }
+      }
+      if (clean.setcard_rows !== undefined && clean.setcard_rows !== "") {
+        const parsedSetcardRows = Number(clean.setcard_rows);
+        if (!Number.isNaN(parsedSetcardRows)) {
+          clean.setcard_rows = parsedSetcardRows;
+        }
+      }
       if (clean.tag_batch_max_assets !== undefined && clean.tag_batch_max_assets !== "") {
         const parsedBatch = Number(clean.tag_batch_max_assets);
         if (!Number.isNaN(parsedBatch)) {
@@ -1164,6 +1189,14 @@ export default function App() {
         .split(",")
         .map((entry) => entry.trim())
         .filter(Boolean);
+      const setcardIncludeTypes = String(data.setcard_include_types || "")
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+      const setcardExcludeTypes = String(data.setcard_exclude_types || "")
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean);
       const hasExportExcludeTypes = Object.prototype.hasOwnProperty.call(data, "export_exclude_types");
       let exportExcludeTypes = String(data.export_exclude_types || "")
         .split(",")
@@ -1178,6 +1211,8 @@ export default function App() {
         .filter(Boolean);
       setSettingsTagIncludeTypes(includeTypes);
       setSettingsTagExcludeTypes(excludeTypes);
+      setSettingsSetcardIncludeTypes(setcardIncludeTypes);
+      setSettingsSetcardExcludeTypes(setcardExcludeTypes);
       setSettingsExportIncludeTypes(exportIncludeTypes);
       setSettingsExportExcludeTypes(exportExcludeTypes);
       setAssetTypeCatalog(catalogTypes);
@@ -2207,6 +2242,8 @@ export default function App() {
         ...settings,
         tag_include_types: settingsTagIncludeTypes.join(","),
         tag_exclude_types: settingsTagExcludeTypes.join(","),
+        setcard_include_types: settingsSetcardIncludeTypes.join(","),
+        setcard_exclude_types: settingsSetcardExcludeTypes.join(","),
         export_include_types: settingsExportIncludeTypes.join(","),
         export_exclude_types: settingsExportExcludeTypes.join(","),
         asset_type_catalog: assetTypeCatalog.join(","),
@@ -2240,6 +2277,30 @@ export default function App() {
           delete payload.tag_batch_project_concurrency;
         } else {
           payload.tag_batch_project_concurrency = parsedConcurrency;
+        }
+      }
+      if (payload.setcard_size_px !== undefined && payload.setcard_size_px !== "") {
+        const parsedSetcardSize = Number(payload.setcard_size_px);
+        if (Number.isNaN(parsedSetcardSize)) {
+          delete payload.setcard_size_px;
+        } else {
+          payload.setcard_size_px = Math.max(256, Math.min(4096, parsedSetcardSize));
+        }
+      }
+      if (payload.setcard_items_per_row !== undefined && payload.setcard_items_per_row !== "") {
+        const parsedSetcardCols = Number(payload.setcard_items_per_row);
+        if (Number.isNaN(parsedSetcardCols)) {
+          delete payload.setcard_items_per_row;
+        } else {
+          payload.setcard_items_per_row = Math.max(1, Math.min(20, parsedSetcardCols));
+        }
+      }
+      if (payload.setcard_rows !== undefined && payload.setcard_rows !== "") {
+        const parsedSetcardRows = Number(payload.setcard_rows);
+        if (Number.isNaN(parsedSetcardRows)) {
+          delete payload.setcard_rows;
+        } else {
+          payload.setcard_rows = Math.max(1, Math.min(20, parsedSetcardRows));
         }
       }
       if (apiKeyInput.trim()) {
@@ -2487,10 +2548,23 @@ export default function App() {
   async function handleGenerateSetcard(projectId) {
     try {
       const res = await generateProjectSetcard(projectId, true);
-      if (res.setcard_url) {
-        setProjectPreview(resolveApiUrl(res.setcard_url));
+      const setcardUrls = Array.isArray(res?.setcard_urls) ? res.setcard_urls : [];
+      const firstUrl = setcardUrls[0] || res?.setcard_url || "";
+      if (firstUrl) {
+        setProjectPreview(resolveApiUrl(firstUrl));
       }
-      toast.info("Setcard generated");
+      if (setcardUrls.length > 1) {
+        const zipUrl = resolveApiUrl(res?.setcard_zip_url || "");
+        toast.info(`Setcards generated (${setcardUrls.length} pages)`);
+        if (zipUrl) {
+          const openZip = window.confirm("Multiple setcards were generated. Open ZIP download now?");
+          if (openZip) {
+            window.open(zipUrl, "_blank", "noopener");
+          }
+        }
+      } else {
+        toast.info("Setcard generated");
+      }
     } catch (err) {
       console.error(err);
       toast.error("Setcard generation failed");
@@ -5681,6 +5755,115 @@ function formatSizeGb(bytes) {
                       </label>
                     ))}
                   
+                  </div>
+                </div>
+              </div>
+              <div className="settings-box">
+                <h3>Setcard generation</h3>
+                <div className="settings-compact-grid">
+                  <div className="settings-compact-item">
+                    <div className="form-row">
+                      <label className="form-label">Setcard size (px, 1:1)</label>
+                      <input
+                        className="form-control"
+                        type="number"
+                        min="256"
+                        max="4096"
+                        step="64"
+                        title="Final setcard image size (square)."
+                        value={settings.setcard_size_px ?? 1080}
+                        onChange={(e) =>
+                          setSettings((prev) => ({ ...prev, setcard_size_px: Number(e.target.value || 0) }))
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div className="settings-compact-item">
+                    <div className="form-row">
+                      <label className="form-label">Items per row</label>
+                      <input
+                        className="form-control"
+                        type="number"
+                        min="1"
+                        max="20"
+                        step="1"
+                        title="How many thumbnails per row."
+                        value={settings.setcard_items_per_row ?? 4}
+                        onChange={(e) =>
+                          setSettings((prev) => ({ ...prev, setcard_items_per_row: Number(e.target.value || 0) }))
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div className="settings-compact-item">
+                    <div className="form-row">
+                      <label className="form-label">Rows per image</label>
+                      <input
+                        className="form-control"
+                        type="number"
+                        min="1"
+                        max="20"
+                        step="1"
+                        title="How many rows per setcard page."
+                        value={settings.setcard_rows ?? 4}
+                        onChange={(e) =>
+                          setSettings((prev) => ({ ...prev, setcard_rows: Number(e.target.value || 0) }))
+                        }
+                      />
+                    </div>
+                  </div>
+                </div>
+                <p className="settings-note">
+                  Multiple pages are generated automatically if items exceed the grid. Project logo overlay remains enabled.
+                </p>
+              </div>
+              <div className="settings-two-col">
+                <div className="settings-box">
+                  <label className="form-label">Setcard include types (optional)</label>
+                  <div className="filter-list filter-list-full filter-grid-4">
+                    {assetTypes.map((assetType) => (
+                      <label key={`settings-setcard-include-${assetType}`} className="filter-item">
+                        <input
+                          type="checkbox"
+                          title="Include this asset type in setcard generation."
+                          checked={settingsSetcardIncludeTypes.includes(assetType)}
+                          onChange={() =>
+                            toggleTypeList(
+                              assetType,
+                              settingsSetcardIncludeTypes,
+                              setSettingsSetcardIncludeTypes,
+                              settingsSetcardExcludeTypes,
+                              setSettingsSetcardExcludeTypes
+                            )
+                          }
+                        />
+                        {assetType}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div className="settings-box settings-split">
+                  <label className="form-label">Setcard exclude types</label>
+                  <div className="filter-list filter-list-full filter-grid-4">
+                    {assetTypes.map((assetType) => (
+                      <label key={`settings-setcard-exclude-${assetType}`} className="filter-item">
+                        <input
+                          type="checkbox"
+                          title="Exclude this asset type from setcard generation."
+                          checked={settingsSetcardExcludeTypes.includes(assetType)}
+                          onChange={() =>
+                            toggleTypeList(
+                              assetType,
+                              settingsSetcardExcludeTypes,
+                              setSettingsSetcardExcludeTypes,
+                              settingsSetcardIncludeTypes,
+                              setSettingsSetcardIncludeTypes
+                            )
+                          }
+                        />
+                        {assetType}
+                      </label>
+                    ))}
                   </div>
                 </div>
               </div>
