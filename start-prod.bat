@@ -49,6 +49,14 @@ if not exist "%DIST_DIR%\index.html" (
   pause
   exit /b 1
 )
+findstr /C:"/ui/assets/" "%DIST_DIR%\index.html" >nul
+if errorlevel 1 (
+  echo [error] Frontend dist seems built with wrong base path.
+  echo         Expected "/ui/assets/" in %DIST_DIR%\index.html
+  echo         Run build-ui.bat to rebuild with VITE_BASE=/ui/
+  pause
+  exit /b 1
+)
 
 echo [3/4] Starting backend with bundled UI...
 set ASSET_UI=true

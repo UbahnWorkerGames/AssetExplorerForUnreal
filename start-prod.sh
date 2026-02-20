@@ -37,6 +37,12 @@ if [[ ! -f "$DIST_DIR/index.html" ]]; then
   echo "Build once before runtime deployment." >&2
   exit 1
 fi
+if ! grep -q "/ui/assets/" "$DIST_DIR/index.html"; then
+  echo "Frontend dist seems built with wrong base path." >&2
+  echo "Expected '/ui/assets/' in $DIST_DIR/index.html" >&2
+  echo "Run ./build-ui.sh to rebuild with VITE_BASE=/ui/" >&2
+  exit 1
+fi
 
 echo "[4/4] Starting backend with bundled UI..."
 export ASSET_UI=true
