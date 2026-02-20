@@ -276,6 +276,7 @@ export default function App() {
   const [copyStatus, setCopyStatus] = useState(null);
   const [projectSearch, setProjectSearch] = useState("");
   const [showEmptyProjects, setShowEmptyProjects] = useState(false);
+  const [showIncompleteTagProjects, setShowIncompleteTagProjects] = useState(false);
   const [projectSortKey, setProjectSortKey] = useState(() => {
     if (typeof localStorage === "undefined") return "name";
     return localStorage.getItem("ameb_project_sort_key") || "name";
@@ -479,6 +480,12 @@ export default function App() {
         const total = Number(stats.total_all ?? stats.total ?? 0);
         if (total > 0) return false;
       }
+      if (showIncompleteTagProjects) {
+        const stats = projectStats[project.id] || {};
+        const total = Number(stats.total_all ?? stats.total ?? 0);
+        const tagged = Number(stats.tagged ?? 0);
+        if (total <= 0 || tagged >= total) return false;
+      }
       if (!query) return true;
       const nameMatch = (project.name || "").toLowerCase().includes(query);
       const tagsMatch = (project.tags || []).some((tag) =>
@@ -496,6 +503,7 @@ export default function App() {
     projectEraFilter,
     projectStats,
     showEmptyProjects,
+    showIncompleteTagProjects,
   ]);
   const sortedProjects = useMemo(() => {
     const dir = projectSortDir === "desc" ? -1 : 1;
@@ -3848,6 +3856,15 @@ function formatSizeGb(bytes) {
                         onChange={(e) => setShowEmptyProjects(e.target.checked)}
                       />
                       <span className="form-check-label">Only empty</span>
+                    </label>
+                    <label className="form-check form-check-inline project-empty-toggle">
+                      <input
+                        className="form-check-input"
+                        type="checkbox"
+                        checked={showIncompleteTagProjects}
+                        onChange={(e) => setShowIncompleteTagProjects(e.target.checked)}
+                      />
+                      <span className="form-check-label">Tags incomplete</span>
                     </label>
                     <select
                       className="form-select form-select-sm project-filter-select"
