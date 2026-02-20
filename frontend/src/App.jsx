@@ -84,10 +84,10 @@ const taskLabelMap = {
   tag_project_retag: "Tag all (project)",
   tag_missing_all: "Tag missing (all)",
   tag_retag_all: "Tag all (all)",
-  name_tags_all: "Asset title -> add [lang] tag (all)",
-  name_tags_project: "Asset title -> add [lang] tag (project)",
-  name_tags_all_missing: "Asset title missing -> add [lang] tag (all)",
-  name_tags_project_missing: "Asset title missing -> add [lang] tag (project)",
+  name_tags_all: "Add asset name translated to tags (all)",
+  name_tags_project: "Add asset name translated to tags (project)",
+  name_tags_all_missing: "Add asset name translated to tags missing (all)",
+  name_tags_project_missing: "Add asset name translated to tags missing (project)",
   tags_translate_all: "Translate tags (all)",
   tags_translate_project: "Translate tags (project)",
   tags_translate_all_missing: "Translate tags missing (all)",
@@ -652,15 +652,8 @@ export default function App() {
     if (activeProviderLabel === "OpenAI") return "OpenAI";
     return `AI (${activeProviderLabel})`;
   }, [activeProviderLabel]);
-  const tagLanguageFlag = useMemo(() => {
-    const lang = String(settings.tag_language || "english").toLowerCase();
-    if (lang === "german") return "🇩🇪";
-    if (lang === "spanish") return "🇪🇸";
-    if (lang === "french") return "🇫🇷";
-    return "🇬🇧";
-  }, [settings.tag_language]);
-  const assetTitleAddTagLabel = `Asset title -> add ${tagLanguageFlag} tag`;
-  const assetTitleAddTagMissingLabel = `Asset title missing -> add ${tagLanguageFlag} tag`;
+  const assetTitleAddTagLabel = "Add asset name translated to tags";
+  const assetTitleAddTagMissingLabel = "Add asset name translated to tags missing";
   const tagBatchDeferredOnRestart = useMemo(() => {
     const provider = String(settings.provider || "").toLowerCase();
     const batchProvider = provider === "openai" || provider === "groq";
