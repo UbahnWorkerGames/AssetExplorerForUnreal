@@ -5518,17 +5518,14 @@ function formatSizeGb(bytes) {
                   <div className="settings-compact-item">
                     <div className="form-row">
                       <label className="form-label">Tag language</label>
-                      <select
-                        className="form-select"
-                        title="Target language for translated tags."
-                        value={settings.tag_language || "english"}
+                      <input
+                        className="form-control"
+                        type="text"
+                        placeholder="english"
+                        title="Target language for translated tags (free text, e.g. english, german, japanese)."
+                        value={settings.tag_language || ""}
                         onChange={(e) => setSettings((prev) => ({ ...prev, tag_language: e.target.value }))}
-                      >
-                        <option value="english">English</option>
-                        <option value="german">German</option>
-                        <option value="spanish">Spanish</option>
-                        <option value="french">French</option>
-                      </select>
+                      />
                     </div>
                   </div>
                   <div className="settings-compact-item">
