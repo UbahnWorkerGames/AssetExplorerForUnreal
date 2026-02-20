@@ -3113,6 +3113,31 @@ def _pick_asset_image(row: Dict[str, Any]) -> Optional[Path]:
     return ASSETS_DIR / row["asset_dir"] / rel
 
 
+def _pick_asset_image_fallback(asset_dir: str) -> Optional[Path]:
+    base = ASSETS_DIR / asset_dir
+    if not base.exists():
+        return None
+    preferred = [
+        "detail.webp",
+        "full.webp",
+        "thumb.webp",
+        "anim_detail.webp",
+        "anim_thumb.webp",
+        "0.webp",
+        "1.webp",
+        "2.webp",
+    ]
+    for name in preferred:
+        candidate = base / name
+        if candidate.exists():
+            return candidate
+    for pattern in ("*thumb*.webp", "*detail*.webp", "*preview*.webp", "*.webp", "*.png", "*.jpg", "*.jpeg"):
+        matches = sorted(base.glob(pattern))
+        if matches:
+            return matches[0]
+    return None
+
+
 
 
 def _generate_project_setcard(project: Dict[str, Any], settings: Dict[str, Any]) -> List[str]:
@@ -3165,10 +3190,17 @@ def _generate_project_setcard(project: Dict[str, Any], settings: Dict[str, Any])
                     else:
                         rel = preview_files[0]
             if not rel:
+                fallback_img = _pick_asset_image_fallback(row["asset_dir"])
+                if fallback_img and fallback_img.exists():
+                    images.append(fallback_img)
                 continue
             img_path = ASSETS_DIR / row["asset_dir"] / rel
             if img_path.exists():
                 images.append(img_path)
+                continue
+            fallback_img = _pick_asset_image_fallback(row["asset_dir"])
+            if fallback_img and fallback_img.exists():
+                images.append(fallback_img)
 
         if not images:
             return []
