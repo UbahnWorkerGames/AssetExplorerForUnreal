@@ -130,14 +130,7 @@ Global row:
 - `Open Source Folder`: open configured source folder on disk.
 - `Setcard`: generate or refresh `setcard.png` from project preview images.
 - `Re-export via UE Cmd`: run UnrealEditor-Cmd export flow, then reimport/sync.
-
-Local row:
-
-- `Tag missing`: queue AI tagging only for assets without finished AI tags yet (`asset_tags.tags_done_at` missing). Use this to continue unfinished projects without retagging everything.
-- `Tag all`: queue full retag and replace existing tags.
 - `Rebuild semantic`: rebuild embeddings for project assets.
-- `Name to tags`: create tags directly from asset names for all assets (local parser, no LLM call). Existing name-based results are refreshed.
-- `Name to tags missing`: run name-to-tags only for assets not processed by this action yet (`name_tags_done_at` missing).
 
 LLM row (provider-dependent):
 

@@ -3870,40 +3870,6 @@ function formatSizeGb(bytes) {
                       </div>
                     </div>
                     <div className="project-stats-tags project-action-tags">
-                        <div className="project-action-row-group project-action-row-group-local">
-                        <div
-                          className="project-action-row-label"
-                          title="Runs on your local backend. Actions here can still call configured AI providers."
-                        >
-                          <FontAwesomeIcon icon={faHardDrive} /> Local
-                        </div>
-                        <div className="project-action-row project-action-row-local">
-                          <button
-                            className="btn btn-outline-dark btn-sm"
-                            type="button"
-                            onClick={handleTagMissingAllProjects}
-                            title="Tag assets across all projects that have never been AI-tagged yet (based on tags_done_at)."
-                          >
-                            AI tag missing (all)
-                          </button>
-                          <button
-                            className="btn btn-outline-dark btn-sm"
-                            type="button"
-                            onClick={handleNameTagsAllSimple}
-                            title="Generate tags from asset names for all assets (local processing)."
-                          >
-                            Name to tags (all)
-                          </button>
-                          <button
-                            className="btn btn-outline-dark btn-sm"
-                            type="button"
-                            onClick={handleNameTagsAllSimpleMissing}
-                            title="Generate tags from asset names only for assets not processed by this action yet (name_tags_done_at missing)."
-                          >
-                            Name to tags missing (all)
-                          </button>
-                        </div>
-                      </div>
                         <div className="project-action-row-group">
                         <div className="project-action-row-label">
                           <FontAwesomeIcon icon={faLightbulb} /> {llmActionGroupLabel}
@@ -4330,38 +4296,6 @@ function formatSizeGb(bytes) {
                                   >
                                     Rebuild semantic
                                   </button>
-                                </div>
-                                <div className="project-action-row-group project-action-row-group-local">
-                                  <div
-                                    className="project-action-row-label"
-                                    title="Runs on your local backend. Actions here can still call configured AI providers."
-                                  >
-                                    <FontAwesomeIcon icon={faHardDrive} /> Local
-                                  </div>
-                                  <div className="project-action-row">
-                                    <button className="btn btn-outline-dark btn-sm" onClick={() => handleTagMissing(project.id)} title="Tag assets in this project that have not been AI-tagged yet (based on tags_done_at).">
-                                      AI tag missing
-                                    </button>
-                                    <button className="btn btn-outline-dark btn-sm" onClick={() => handleRetagAll(project.id)} title="Regenerate and replace tags for all assets in this project (local processing).">
-                                      Tag all
-                                    </button>
-                                    <button
-                                      className="btn btn-outline-dark btn-sm"
-                                      type="button"
-                                      onClick={() => handleNameTagsProjectSimple(project.id)}
-                                      title="Generate tags from asset names for this project (local processing)."
-                                    >
-                                      Name to tags
-                                    </button>
-                                    <button
-                                      className="btn btn-outline-dark btn-sm"
-                                      type="button"
-                                      onClick={() => handleNameTagsProjectSimpleMissing(project.id)}
-                                      title="Generate tags from asset names only for assets not processed by this action yet in this project (name_tags_done_at missing)."
-                                    >
-                                      Name to tags missing
-                                    </button>
-                                  </div>
                                 </div>
                                 <div className="project-action-row-group">
                                   <div className="project-action-row-label">
