@@ -7107,13 +7107,13 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
         masked["ue_cmd_path"] = ""
     if "skip_export_if_on_server" in masked:
         raw = str(masked.get("skip_export_if_on_server") or "").strip().lower()
-        masked["skip_export_if_on_server"] = "true" if raw in {"1", "true", "yes", "on"} else "false"
+        masked["skip_export_if_on_server"] = raw in {"1", "true", "yes", "on"}
     if "export_overwrite_zips" in masked:
         raw = str(masked.get("export_overwrite_zips") or "").strip().lower()
         masked["export_overwrite_zips"] = "true" if raw in {"1", "true", "yes", "on"} else "false"
     if "export_upload_after_export" in masked:
         raw = str(masked.get("export_upload_after_export") or "").strip().lower()
-        masked["export_upload_after_export"] = "true" if raw in {"1", "true", "yes", "on"} else "false"
+        masked["export_upload_after_export"] = raw in {"1", "true", "yes", "on"}
     if "serve_frontend" in masked:
         raw = str(masked.get("serve_frontend") or "").strip().lower()
         masked["serve_frontend"] = "true" if raw in {"1", "true", "yes", "on"} else "false"
