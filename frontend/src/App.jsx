@@ -3869,6 +3869,51 @@ function formatSizeGb(bytes) {
                         <span className="project-stats-value">{tagStatsAggregate.assetsWithoutTags}</span>
                       </div>
                     </div>
+                    <div className="project-stats-tags project-action-tags">
+                        <div className="project-action-row-group">
+                        <div className="project-action-row-label">
+                          <FontAwesomeIcon icon={faLightbulb} /> {llmActionGroupLabel}
+                        </div>
+                        <div className="project-action-row project-action-row-llm">
+                          <button
+                            className="btn btn-outline-dark btn-sm"
+                            type="button"
+                            onClick={handleTranslateNameTagsAll}
+                            disabled={!llmReady}
+                            title={withLlmTitle("Use LLM to generate title-like tags from asset names for all projects.")}
+                          >
+                          Asset title (all)
+                          </button>
+                          <button
+                            className="btn btn-outline-dark btn-sm"
+                            type="button"
+                            onClick={handleTranslateNameTagsAllMissing}
+                            disabled={!llmReady}
+                            title={withLlmTitle("Use LLM to generate title-like tags from asset names only where this action has not run yet (name_translate_tags_done_at missing).")}
+                          >
+                          Asset title missing (all)
+                          </button>
+                          <button
+                            className="btn btn-outline-dark btn-sm"
+                            type="button"
+                            onClick={handleTranslateAllTags}
+                            disabled={!llmReady}
+                            title={withLlmTitle("Use LLM to translate existing tags for all projects into the configured language.")}
+                          >
+                          Translate tags (all)
+                          </button>
+                          <button
+                            className="btn btn-outline-dark btn-sm"
+                            type="button"
+                            onClick={handleTranslateAllTagsMissing}
+                            disabled={!llmReady}
+                            title={withLlmTitle("Use LLM to translate existing tags only for assets not processed by tag translation yet (translate_tags_done_at missing).")}
+                          >
+                          Translate tags missing (all)
+                          </button>
+                        </div>
+                      </div>
+                    </div>
                     <div className="project-restart-note">
                       After a server restart, actions may be slower at first while archived batch outputs are imported.
                     </div>
