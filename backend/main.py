@@ -3313,7 +3313,7 @@ def _generate_project_setcard(project: Dict[str, Any], settings: Dict[str, Any])
                 if not page_images:
                     continue
                 page_label = f"{title} ({page_idx + 1}/{full_page_count})"
-                page_file = f"setcard_{page_idx + 2:02d}.png"
+                page_file = f"setcard_{page_idx + 2}.png"
                 page_path = _render_setcard(page_images, page_label, page_file)
                 if page_path:
                     output_paths.append(page_path)
@@ -8784,7 +8784,19 @@ def generate_project_setcard(project_id: int, force: bool = Query(False)) -> Dic
         files = sorted(folder_path.glob("setcard*.png"))
         if not files:
             return []
-        files.sort(key=lambda p: (0 if p.name == "setcard.png" else 1, p.name))
+
+        def _sort_key(path: Path) -> tuple:
+            if path.name == "setcard.png":
+                return (0, 0, path.name)
+            stem = path.stem  # e.g. setcard_2
+            suffix = stem.removeprefix("setcard_")
+            try:
+                idx = int(suffix)
+            except Exception:
+                idx = 10**9
+            return (1, idx, path.name)
+
+        files.sort(key=_sort_key)
         return files
 
     def _build_response(files: List[Path]) -> Dict[str, Any]:
