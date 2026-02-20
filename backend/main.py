@@ -3118,7 +3118,7 @@ def _generate_project_setcard(project: Dict[str, Any], settings: Dict[str, Any])
     try:
         project_id = project["id"]
         size_px = _normalize_setcard_int(settings.get("setcard_size_px"), 1080, 256, 4096)
-        cols = _normalize_setcard_int(settings.get("setcard_items_per_row"), 4, 1, 20)
+        cols = _normalize_setcard_int(settings.get("setcard_items_per_row"), 5, 1, 20)
         rows_per_page = _normalize_setcard_int(settings.get("setcard_rows"), 4, 1, 20)
         include_types = set(_parse_type_filter(settings.get("setcard_include_types")))
         exclude_types = set(_parse_type_filter(settings.get("setcard_exclude_types")))
@@ -6701,7 +6701,7 @@ def update_settings(payload: SettingsUpdate) -> Dict[str, str]:
     if "setcard_size_px" in data:
         data["setcard_size_px"] = _normalize_setcard_int(data.get("setcard_size_px"), 1080, 256, 4096)
     if "setcard_items_per_row" in data:
-        data["setcard_items_per_row"] = _normalize_setcard_int(data.get("setcard_items_per_row"), 4, 1, 20)
+        data["setcard_items_per_row"] = _normalize_setcard_int(data.get("setcard_items_per_row"), 5, 1, 20)
     if "setcard_rows" in data:
         data["setcard_rows"] = _normalize_setcard_int(data.get("setcard_rows"), 4, 1, 20)
     if "tag_translation_language" in data and data.get("tag_translation_language"):
@@ -7060,9 +7060,9 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
     else:
         masked["setcard_size_px"] = "1080"
     if "setcard_items_per_row" in masked:
-        masked["setcard_items_per_row"] = str(_normalize_setcard_int(masked.get("setcard_items_per_row"), 4, 1, 20))
+        masked["setcard_items_per_row"] = str(_normalize_setcard_int(masked.get("setcard_items_per_row"), 5, 1, 20))
     else:
-        masked["setcard_items_per_row"] = "4"
+        masked["setcard_items_per_row"] = "5"
     if "setcard_rows" in masked:
         masked["setcard_rows"] = str(_normalize_setcard_int(masked.get("setcard_rows"), 4, 1, 20))
     else:

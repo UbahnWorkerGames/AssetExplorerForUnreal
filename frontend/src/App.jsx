@@ -618,7 +618,7 @@ export default function App() {
     tag_include_types: "",
     tag_exclude_types: "",
     setcard_size_px: 1080,
-    setcard_items_per_row: 4,
+    setcard_items_per_row: 5,
     setcard_rows: 4,
     setcard_include_types: "",
     setcard_exclude_types: "",
@@ -5712,13 +5712,13 @@ function formatSizeGb(bytes) {
               </div>
               <div className="settings-two-col">
                 <div className="settings-box">
-                  <label className="form-label">Export include types (optional)</label>
+                  <label className="form-label">Export include types (optional, Unreal Bridge)</label>
                   <div className="filter-list filter-list-full filter-grid-4">
                     {assetTypes.map((assetType) => (
                       <label key={`settings-export-include-${assetType}`} className="filter-item">
                         <input
                           type="checkbox"
-                          title="Include this asset type in export operations."
+                          title="Include this asset type for Unreal Bridge export operations."
                           checked={settingsExportIncludeTypes.includes(assetType)}
                           onChange={() =>
                             toggleTypeList(
@@ -5736,13 +5736,13 @@ function formatSizeGb(bytes) {
                   </div>
                 </div>
                 <div className="settings-box settings-split">
-                  <label className="form-label">Export exclude types</label>
+                  <label className="form-label">Export exclude types (Unreal Bridge)</label>
                   <div className="filter-list filter-list-full filter-grid-4">
                     {assetTypes.map((assetType) => (
                       <label key={`settings-export-exclude-${assetType}`} className="filter-item">
                         <input
                           type="checkbox"
-                          title="Exclude this asset type from export operations."
+                          title="Exclude this asset type from Unreal Bridge export operations."
                           checked={settingsExportExcludeTypes.includes(assetType)}
                           onChange={() =>
                             toggleTypeList(
@@ -5791,7 +5791,7 @@ function formatSizeGb(bytes) {
                         max="20"
                         step="1"
                         title="How many thumbnails per row."
-                        value={settings.setcard_items_per_row ?? 4}
+                        value={settings.setcard_items_per_row ?? 5}
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, setcard_items_per_row: Number(e.target.value || 0) }))
                         }
