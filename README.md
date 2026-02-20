@@ -117,6 +117,7 @@ Screenshots (from `Images/`):
 ![Overview 3](Images/3.jpg)
 ![Overview 4](Images/4.jpg)
 ![Overview 5](Images/5.jpg)
+![Setcard Example](Images/setcard_03.png)
 
 ## Project Actions (What Each Button Does)
 
@@ -132,10 +133,10 @@ Global row:
 
 Local row:
 
-- `Tag missing`: queue AI tagging for assets not tagged yet (`asset_tags.tags_done_at` missing).
+- `Tag missing`: queue AI tagging only for assets without finished AI tags yet (`asset_tags.tags_done_at` missing). Use this to continue unfinished projects without retagging everything.
 - `Tag all`: queue full retag and replace existing tags.
 - `Rebuild semantic`: rebuild embeddings for project assets.
-- `Name to tags`: create tags from asset names (local, no LLM translation).
+- `Name to tags`: create tags directly from asset names for all assets (local parser, no LLM call). Existing name-based results are refreshed.
 - `Name to tags missing`: run name-to-tags only for assets not processed by this action yet (`name_tags_done_at` missing).
 
 LLM row (provider-dependent):
