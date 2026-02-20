@@ -4036,7 +4036,10 @@ function formatSizeGb(bytes) {
                       ? project.folder_path.split(/[/\\]+/).filter(Boolean).pop()
                       : "-";
                   return (
-                    <div key={project.id} className="col-12 col-md-6 col-lg-3">
+                    <div
+                      key={project.id}
+                      className={`col-12 col-md-6 ${sortedProjects.length === 3 ? "col-lg-4" : "col-lg-3"}`}
+                    >
                       <div
                         className="card project-item h-100"
                         onContextMenu={(e) => {
