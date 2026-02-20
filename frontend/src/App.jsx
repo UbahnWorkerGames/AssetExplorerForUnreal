@@ -35,6 +35,10 @@ import {
   regenerateEmbeddingsAll,
   testLlmTags,
   regenerateProjectEmbeddings,
+  retagProject,
+  tagProjectMissing,
+  tagMissingAllProjects,
+  tagAllProjects,
   translateProjectNameTags,
   translateProjectNameTagsMissing,
   translateAllNameTags,
@@ -76,6 +80,10 @@ const isTrue = (value) => String(value).toLowerCase() === "true" || value === tr
 const taskLabelMap = {
   embeddings_all: "Rebuild semantic (all)",
   embeddings_project: "Rebuild semantic (project)",
+  tag_project_missing: "Tag missing (project)",
+  tag_project_retag: "Tag all (project)",
+  tag_missing_all: "Tag missing (all)",
+  tag_retag_all: "Tag all (all)",
   name_tags_all: "Name -> tags (LLM, all)",
   name_tags_project: "Name -> tags (LLM, project)",
   name_tags_all_missing: "Name -> tags missing (LLM, all)",
@@ -1944,6 +1952,53 @@ export default function App() {
       await handleRestartServer(false);
     }
   }
+  async function handleTagMissing(projectId) {
+    try {
+      await tagProjectMissing(projectId);
+      setProjectTagStatus((prev) => ({ ...prev, [projectId]: { status: "queued", done: 0, total: 0, errors: 0 } }));
+      if (tagBatchDeferredOnRestart) {
+        await maybeOfferRestartForDeferredTagAction("Tag missing");
+      }
+    } catch (err) {
+      toast.error(`Tag missing failed: ${err.message || "unknown error"}`);
+    }
+  }
+  async function handleRetagAll(projectId) {
+    if (!window.confirm("Retag all assets? Existing tags will be replaced.")) return;
+    try {
+      await retagProject(projectId);
+      setProjectTagStatus((prev) => ({ ...prev, [projectId]: { status: "queued", done: 0, total: 0, errors: 0 } }));
+      if (tagBatchDeferredOnRestart) {
+        await maybeOfferRestartForDeferredTagAction("Tag all");
+      }
+    } catch (err) {
+      toast.error(`Retag failed: ${err.message || "unknown error"}`);
+    }
+  }
+  async function handleTagMissingAllProjects() {
+    if (!window.confirm("Tag missing for all projects?")) return;
+    try {
+      await tagMissingAllProjects();
+      toast.info("Tag missing (all projects) queued.");
+      if (tagBatchDeferredOnRestart) {
+        await maybeOfferRestartForDeferredTagAction("Tag missing (all projects)");
+      }
+    } catch (err) {
+      toast.error(`Tag missing failed: ${err.message || "unknown error"}`);
+    }
+  }
+  async function handleTagAllProjects() {
+    if (!window.confirm("Tag all assets for all projects? Existing tags will be replaced.")) return;
+    try {
+      await tagAllProjects();
+      toast.info("Tag all (all projects) queued.");
+      if (tagBatchDeferredOnRestart) {
+        await maybeOfferRestartForDeferredTagAction("Tag all (all projects)");
+      }
+    } catch (err) {
+      toast.error(`Tag all failed: ${err.message || "unknown error"}`);
+    }
+  }
   async function handleTranslateNameTagsAll() {
     if (!window.confirm("Translate asset names to tags (LLM) for all projects?")) return;
     try {
@@ -3783,6 +3838,24 @@ function formatSizeGb(bytes) {
                           <button
                             className="btn btn-outline-dark btn-sm"
                             type="button"
+                            onClick={handleTagMissingAllProjects}
+                            disabled={!llmReady}
+                            title={withLlmTitle("Generate missing tags for all projects.")}
+                          >
+                          Tag missing (all)
+                          </button>
+                          <button
+                            className="btn btn-outline-dark btn-sm"
+                            type="button"
+                            onClick={handleTagAllProjects}
+                            disabled={!llmReady}
+                            title={withLlmTitle("Retag all assets across all projects (replaces tags).")}
+                          >
+                          Tag all (all)
+                          </button>
+                          <button
+                            className="btn btn-outline-dark btn-sm"
+                            type="button"
                             onClick={handleTranslateNameTagsAll}
                             disabled={!llmReady}
                             title={withLlmTitle("Use LLM to derive tags from asset names for all projects and append them to tags.")}
@@ -4207,6 +4280,24 @@ function formatSizeGb(bytes) {
                                     <FontAwesomeIcon icon={faLightbulb} /> {llmActionGroupLabel}
                                   </div>
                                   <div className="project-action-row">
+                                    <button
+                                      className="btn btn-outline-dark btn-sm"
+                                      type="button"
+                                      onClick={() => handleTagMissing(project.id)}
+                                      disabled={!llmReady}
+                                      title={withLlmTitle("Generate missing tags for this project.")}
+                                    >
+                                      Tag missing
+                                    </button>
+                                    <button
+                                      className="btn btn-outline-dark btn-sm"
+                                      type="button"
+                                      onClick={() => handleRetagAll(project.id)}
+                                      disabled={!llmReady}
+                                      title={withLlmTitle("Retag all assets in this project (replaces tags).")}
+                                    >
+                                      Tag all
+                                    </button>
                                     <button
                                       className="btn btn-outline-dark btn-sm"
                                       type="button"

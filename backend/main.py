@@ -1694,6 +1694,9 @@ def _task_worker() -> None:
             elif kind == "tag_missing_all":
                 _tag_all_projects("missing", task_id=task_id)
                 _task_update(task_id, status="done", finished_at=now_iso())
+            elif kind == "tag_retag_all":
+                _tag_all_projects("retag", task_id=task_id)
+                _task_update(task_id, status="done", finished_at=now_iso())
             elif kind == "name_tags_all":
                 _translate_name_tags(None, task_id=task_id, only_missing=False)
                 _task_update(task_id, status="done", finished_at=now_iso())
@@ -6783,6 +6786,12 @@ def project_embedding_status(project_id: int) -> Dict[str, Any]:
 @app.post("/projects/tag-missing-all")
 def tag_missing_all() -> Dict[str, Any]:
     task_id = _enqueue_task("tag_missing_all", None)
+    return {"status": "queued", "task_id": task_id}
+
+
+@app.post("/projects/tag-all")
+def tag_all_projects() -> Dict[str, Any]:
+    task_id = _enqueue_task("tag_retag_all", None)
     return {"status": "queued", "task_id": task_id}
 
 

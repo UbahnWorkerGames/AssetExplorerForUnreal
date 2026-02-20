@@ -427,6 +427,12 @@ export async function tagMissingAllProjects() {
   return res.json();
 }
 
+export async function tagAllProjects() {
+  const res = await fetch(`${API_BASE}/projects/tag-all`, { method: "POST" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 
 async function handleJson(res) {
   if (!res.ok) {
