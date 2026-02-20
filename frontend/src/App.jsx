@@ -651,6 +651,11 @@ export default function App() {
     if (activeProviderLabel === "OpenAI") return "OpenAI";
     return `AI (${activeProviderLabel})`;
   }, [activeProviderLabel]);
+  const tagBatchDeferredOnRestart = useMemo(() => {
+    const provider = String(settings.provider || "").toLowerCase();
+    const batchProvider = provider === "openai" || provider === "groq";
+    return Boolean(settings.tag_use_batch_mode) && batchProvider;
+  }, [settings.provider, settings.tag_use_batch_mode]);
   const showProjectFilesystemActions = useMemo(() => {
     if (typeof window === "undefined") return false;
     const host = String(window.location.hostname || "").toLowerCase();
@@ -1922,6 +1927,15 @@ export default function App() {
       toast.error(`Embedding regen failed: ${err.message || "unknown error"}`);
     }
   }
+  async function maybeOfferRestartForDeferredTagAction(actionLabel) {
+    if (!tagBatchDeferredOnRestart) return;
+    const shouldRestart = window.confirm(
+      `${actionLabel} runs in batch mode and is applied on next restart. Restart backend now?`
+    );
+    if (shouldRestart) {
+      await handleRestartServer(false);
+    }
+  }
   async function handleTagMissingAllProjects() {
     const missingAssets = Number(tagStatsAggregate?.assetsWithoutTags || 0);
     const totalAssets = Number(tagStatsAggregate?.totalAssets || 0);
@@ -1931,7 +1945,12 @@ export default function App() {
     if (!window.confirm(confirmMessage)) return;
     try {
       await tagMissingAllProjects();
-      toast.info("Tagging missing assets for all projects... Batch results are downloaded now and applied on next restart.");
+      if (tagBatchDeferredOnRestart) {
+        toast.info("Tagging missing assets for all projects... Batch results are downloaded now and applied on next restart.");
+        await maybeOfferRestartForDeferredTagAction("Tagging missing assets");
+      } else {
+        toast.info("Tagging missing assets for all projects...");
+      }
     } catch (err) {
       toast.error(`Tag missing failed: ${err.message || "unknown error"}`);
     }
@@ -1940,7 +1959,12 @@ export default function App() {
     if (!window.confirm("Translate asset names to tags (LLM) for all projects?")) return;
     try {
       await translateAllNameTags();
-      toast.info("Translating asset names to tags (all projects)... Batch results are downloaded now and applied on next restart.");
+      if (tagBatchDeferredOnRestart) {
+        toast.info("Translating asset names to tags (all projects)... Batch results are downloaded now and applied on next restart.");
+        await maybeOfferRestartForDeferredTagAction("Translating asset names to tags");
+      } else {
+        toast.info("Translating asset names to tags (all projects)...");
+      }
     } catch (err) {
       toast.error(`Translate names failed: ${err.message || "unknown error"}`);
     }
@@ -1949,7 +1973,12 @@ export default function App() {
     if (!window.confirm("Translate asset names to tags (LLM) only for assets not processed yet?")) return;
     try {
       await translateAllNameTagsMissing();
-      toast.info("Translating missing asset names to tags (all projects)... Batch results are downloaded now and applied on next restart.");
+      if (tagBatchDeferredOnRestart) {
+        toast.info("Translating missing asset names to tags (all projects)... Batch results are downloaded now and applied on next restart.");
+        await maybeOfferRestartForDeferredTagAction("Translating missing asset names");
+      } else {
+        toast.info("Translating missing asset names to tags (all projects)...");
+      }
     } catch (err) {
       toast.error(`Translate names missing failed: ${err.message || "unknown error"}`);
     }
@@ -1958,7 +1987,12 @@ export default function App() {
     if (!window.confirm("Generate tags from asset names for all projects? (no translation)")) return;
     try {
       await nameTagsAllSimple();
-      toast.info("Generating tags from names (all projects)... Batch results are downloaded now and applied on next restart.");
+      if (tagBatchDeferredOnRestart) {
+        toast.info("Generating tags from names (all projects)... Batch results are downloaded now and applied on next restart.");
+        await maybeOfferRestartForDeferredTagAction("Generating tags from names");
+      } else {
+        toast.info("Generating tags from names (all projects)...");
+      }
     } catch (err) {
       toast.error(`Name->tags failed: ${err.message || "unknown error"}`);
     }
@@ -1967,7 +2001,12 @@ export default function App() {
     if (!window.confirm("Generate tags from names only for assets with too few tags?")) return;
     try {
       await nameTagsAllSimpleMissing();
-      toast.info("Generating missing name-based tags (all projects)... Batch results are downloaded now and applied on next restart.");
+      if (tagBatchDeferredOnRestart) {
+        toast.info("Generating missing name-based tags (all projects)... Batch results are downloaded now and applied on next restart.");
+        await maybeOfferRestartForDeferredTagAction("Generating missing name-based tags");
+      } else {
+        toast.info("Generating missing name-based tags (all projects)...");
+      }
     } catch (err) {
       toast.error(`Name->tags missing failed: ${err.message || "unknown error"}`);
     }
@@ -1976,7 +2015,12 @@ export default function App() {
     if (!window.confirm("Translate existing tags for all projects (LLM)?")) return;
     try {
       await translateAllTags();
-      toast.info("Translating existing tags (all projects)... Batch results are downloaded now and applied on next restart.");
+      if (tagBatchDeferredOnRestart) {
+        toast.info("Translating existing tags (all projects)... Batch results are downloaded now and applied on next restart.");
+        await maybeOfferRestartForDeferredTagAction("Translating existing tags");
+      } else {
+        toast.info("Translating existing tags (all projects)...");
+      }
     } catch (err) {
       toast.error(`Translate tags failed: ${err.message || "unknown error"}`);
     }
@@ -1985,7 +2029,12 @@ export default function App() {
     if (!window.confirm("Translate tags only for assets without translated tags?")) return;
     try {
       await translateAllTagsMissing();
-      toast.info("Translating missing tags (all projects)... Batch results are downloaded now and applied on next restart.");
+      if (tagBatchDeferredOnRestart) {
+        toast.info("Translating missing tags (all projects)... Batch results are downloaded now and applied on next restart.");
+        await maybeOfferRestartForDeferredTagAction("Translating missing tags");
+      } else {
+        toast.info("Translating missing tags (all projects)...");
+      }
     } catch (err) {
       toast.error(`Translate tags missing failed: ${err.message || "unknown error"}`);
     }
@@ -4093,20 +4142,6 @@ function formatSizeGb(bytes) {
                                 <span className="project-meta-label">Tagged assets</span>
                                 <span className="project-meta-value">
                                   {(projectStats[project.id]?.tagged ?? 0)}/{(projectStats[project.id]?.total ?? 0)}
-                                </span>
-                              </div>
-                              <div className="project-meta">
-                                <span className="project-meta-label">Storage</span>
-                                <span className="project-meta-value">
-                                  {(project.source_preference || "external").toLowerCase() === "internal" ? (
-                                    <span title="Internal source: project directory is preferred." aria-label="Internal">
-                                      <FontAwesomeIcon icon={faHardDrive} /> Local
-                                    </span>
-                                  ) : (
-                                    <span title="External source: original source directory is preferred." aria-label="External">
-                                      <FontAwesomeIcon icon={faFolderOpen} /> External
-                                    </span>
-                                  )}
                                 </span>
                               </div>
                               <div className="project-meta">
