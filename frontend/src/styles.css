@@ -1634,7 +1634,16 @@ body {
 }
 
 .project-sort-dir-btn {
-  color: #fff;
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+}
+
+.project-sort-dir-btn:hover,
+.project-sort-dir-btn:focus,
+.project-sort-dir-btn:focus-visible,
+.project-sort-dir-btn:active {
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
 }
 
 .drop-zone {
