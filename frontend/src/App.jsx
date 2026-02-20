@@ -105,6 +105,52 @@ const normalizeProjectArtStyle = (project) => {
 };
 const formatTaskLabel = (kind) => taskLabelMap[kind] || kind;
 
+function getHashViewAndParams() {
+  if (typeof window === "undefined") return { view: null, params: new URLSearchParams() };
+  const raw = window.location.hash.replace("#", "").trim();
+  const [viewPart, queryPart] = raw.split("?", 2);
+  const view = (viewPart || "").trim();
+  const params = new URLSearchParams(queryPart || "");
+  return { view, params };
+}
+
+function readProjectIdsFromUrl() {
+  if (typeof window === "undefined") return [];
+  const ids = [];
+  const collect = (params) => {
+    const single = String(params.get("project_id") || "").trim();
+    if (single) ids.push(single);
+    const multi = String(params.get("project_ids") || "").trim();
+    if (multi) {
+      multi
+        .split(",")
+        .map((part) => String(part || "").trim())
+        .filter(Boolean)
+        .forEach((id) => ids.push(id));
+    }
+  };
+  collect(new URLSearchParams(window.location.search || ""));
+  const { params: hashParams } = getHashViewAndParams();
+  collect(hashParams);
+  return Array.from(new Set(ids));
+}
+
+function readProjectIdsFromHash() {
+  const { params } = getHashViewAndParams();
+  const ids = [];
+  const single = String(params.get("project_id") || "").trim();
+  if (single) ids.push(single);
+  const multi = String(params.get("project_ids") || "").trim();
+  if (multi) {
+    multi
+      .split(",")
+      .map((part) => String(part || "").trim())
+      .filter(Boolean)
+      .forEach((id) => ids.push(id));
+  }
+  return Array.from(new Set(ids));
+}
+
 function TagPill({ label, onClick }) {
   return (
     <button className="tag-pill" type="button" onClick={onClick}>
@@ -683,13 +729,17 @@ export default function App() {
     return host === "localhost" || host === "::1" || host.startsWith("127.");
   }, []);
   function resolveViewFromHash() {
-    if (typeof window === "undefined") return null;
-    const hash = window.location.hash.replace("#", "").trim();
-    return views.includes(hash) ? hash : null;
+    const { view: hashView } = getHashViewAndParams();
+    return views.includes(hashView) ? hashView : null;
   }
-  function handleViewClick(nextView, preserveProjectSelection = false) {
+  function handleViewClick(nextView, preserveProjectSelection = false, hashParams = null) {
     if (typeof window !== "undefined") {
-      window.location.hash = nextView;
+      if (hashParams && typeof hashParams === "object") {
+        const qs = new URLSearchParams(hashParams).toString();
+        window.location.hash = qs ? `${nextView}?${qs}` : nextView;
+      } else {
+        window.location.hash = nextView;
+      }
     }
     setAboutOpen(false);
     setView(nextView);
@@ -711,16 +761,28 @@ export default function App() {
       if (next && next !== viewRef.current) {
         setView(next);
       }
+      if (next === "assets" && projects.length > 0) {
+        const requestedIds = readProjectIdsFromHash();
+        if (requestedIds.length) {
+          const allIds = projects.map((project) => String(project.id));
+          const allowed = new Set(allIds);
+          const filtered = requestedIds.filter((id) => allowed.has(String(id)));
+          setSelectedProjects(filtered.length ? filtered : allIds);
+          resetPaging(true, true);
+        }
+      }
     };
     applyHash();
     const onHashChange = () => applyHash();
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
-  }, []);
+  }, [projects]);
   useEffect(() => {
     viewRef.current = view;
     if (typeof window === "undefined") return;
-    const hash = `#${view}`;
+    const { view: hashView, params } = getHashViewAndParams();
+    const qs = params.toString();
+    const hash = `#${view}${hashView === view && qs ? `?${qs}` : ""}`;
     if (window.location.hash !== hash) {
       window.history.replaceState(null, "", hash);
     }
@@ -1066,7 +1128,15 @@ export default function App() {
     fetchProjects()
       .then((data) => {
         setProjects(data);
-        setSelectedProjects(data.map((project) => String(project.id)));
+        const allIds = data.map((project) => String(project.id));
+        const requestedIds = readProjectIdsFromUrl();
+        if (requestedIds.length) {
+          const allowed = new Set(allIds);
+          const filtered = requestedIds.filter((id) => allowed.has(String(id)));
+          setSelectedProjects(filtered.length ? filtered : allIds);
+        } else {
+          setSelectedProjects(allIds);
+        }
       })
       .catch(console.error);
     fetchAssetTypes()
@@ -2742,7 +2812,7 @@ export default function App() {
     setSelectedAssetId(null);
     setSelectedAsset(null);
     resetPaging(true, true);
-    handleViewClick("assets", true);
+    handleViewClick("assets", true, { project_id: String(projectId) });
   }
   function formatApproxSize(meta) {
     const size = meta?.mesh?.approx_size_cm;
