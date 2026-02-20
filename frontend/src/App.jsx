@@ -159,6 +159,15 @@ function getProjectActivePath(project) {
   if (pref === "internal") return internalContent || externalContent || folderPath || sourcePath;
   return externalContent || internalContent || sourcePath || folderPath;
 }
+
+function getProjectActiveSizeBytes(project) {
+  const pref = String(project?.source_preference || "external").toLowerCase();
+  const sourceBytes = Number(project?.source_size_bytes || 0);
+  const internalBytes = Number(project?.folder_size_bytes || project?.size_bytes || 0);
+  if (pref === "internal") return internalBytes > 0 ? internalBytes : sourceBytes;
+  return sourceBytes > 0 ? sourceBytes : internalBytes;
+}
+
 function truncateText(value, maxLength) {
   if (!value) return "";
   if (value.length <= maxLength) return value;
@@ -513,6 +522,11 @@ export default function App() {
         const af = String(a.source_folder || a.folder_path || "");
         const bf = String(b.source_folder || b.folder_path || "");
         return af.localeCompare(bf, undefined, { numeric: true, sensitivity: "base" }) * dir;
+      }
+      if (projectSortKey === "size") {
+        const as = getProjectActiveSizeBytes(a);
+        const bs = getProjectActiveSizeBytes(b);
+        return (as - bs) * dir;
       }
       const an = String(a.name || "");
       const bn = String(b.name || "");
@@ -3967,10 +3981,12 @@ function formatSizeGb(bytes) {
                       <option value="name">Sort: Name</option>
                       <option value="id">Sort: ID</option>
                       <option value="source_folder">Sort: Source pack folder</option>
+                      <option value="size">Sort: Active size</option>
                     </select>
                     <button
                       className="btn btn-outline-dark btn-sm project-sort-dir-btn"
                       type="button"
+                      style={{ color: "#fff" }}
                       onClick={() =>
                         setProjectSortDir((prev) => (prev === "asc" ? "desc" : "asc"))
                       }
