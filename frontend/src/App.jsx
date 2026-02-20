@@ -234,7 +234,10 @@ function AssetCard({ asset, project, onSelect, onContextMenu, tileSize, isSelect
   const displayName = asset?.meta?.package ? asset.meta.package.split("/").pop() : asset.name;
   const listImage = asset.anim_thumb || asset.thumb_image;
   const imageSize = tileSize ? Math.max(140, tileSize) : 200;
-  const displayTags = (asset?.display_tags && asset.display_tags.length ? asset.display_tags : asset?.tags || []).slice(0, 4);
+  const topTags = (asset?.display_tags && asset.display_tags.length ? asset.display_tags : asset?.tags || []).slice(0, 4);
+  const classTag = String(asset?.meta?.class || asset?.type || "").trim();
+  const hasClassTag = classTag && !topTags.some((tag) => String(tag || "").toLowerCase() === classTag.toLowerCase());
+  const displayTags = hasClassTag ? [...topTags, classTag] : topTags;
   return (
     <button
       className={`asset-card${isSelected ? " selected" : ""}`}
