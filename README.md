@@ -117,7 +117,7 @@ Screenshots (from `Images/`):
 ![Overview 3](Images/3.jpg)
 ![Overview 4](Images/4.jpg)
 ![Overview 5](Images/5.jpg)
-![Setcard Example](Images/setcard_03.png)
+![Setcard Example](Images/setcard.png)
 
 ## Project Actions (What Each Button Does)
 
