@@ -663,6 +663,115 @@ body {
   left: 50%;
 }
 
+.live-console-toggle {
+  position: fixed;
+  left: 16px;
+  bottom: 14px;
+  z-index: 1700;
+}
+
+.live-console {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 34vh;
+  min-height: 170px;
+  max-height: 360px;
+  background: #0b1220;
+  color: #cbd5e1;
+  border-top: 1px solid #334155;
+  z-index: 1650;
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+.live-console-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #1e293b;
+  background: #0f172a;
+}
+
+.live-console-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.live-console-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.live-console-level {
+  min-width: 110px;
+  height: 30px;
+}
+
+.live-console-autoscroll {
+  color: #cbd5e1;
+  font-size: 12px;
+}
+
+.live-console-body {
+  overflow: auto;
+  padding: 8px 12px 12px;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.live-console-line {
+  display: grid;
+  grid-template-columns: auto auto auto 1fr;
+  gap: 10px;
+  align-items: start;
+  margin: 0 0 4px;
+}
+
+.live-console-ts {
+  color: #94a3b8;
+  white-space: nowrap;
+}
+
+.live-console-lvl {
+  font-weight: 700;
+  min-width: 54px;
+}
+
+.live-console-src {
+  color: #a5b4fc;
+  white-space: nowrap;
+}
+
+.live-console-line.level-error .live-console-lvl {
+  color: #fda4af;
+}
+
+.live-console-line.level-warning .live-console-lvl {
+  color: #fde68a;
+}
+
+.live-console-line.level-info .live-console-lvl {
+  color: #93c5fd;
+}
+
+.live-console-msg {
+  color: #e2e8f0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.live-console-empty {
+  color: #94a3b8;
+}
+
 
 .upload-progress {
   display: grid;

@@ -12,6 +12,7 @@ import {
   fetchProjectStats,
   fetchTasks,
   fetchQueueStatus,
+  fetchRecentLogs,
   enqueueOpenAiRecovery,
   cancelTask,
   cancelAllTasks,
@@ -78,6 +79,7 @@ Name: {name}
 Class: {asset_class}
 Description: {description}
 Existing tags: {existing_tags}`;
+const LIVE_CONSOLE_MAX_LINES = 500;
 const isTrue = (value) => String(value).toLowerCase() === "true" || value === true;
 const taskLabelMap = {
   embeddings_all: "Rebuild semantic (all)",
@@ -329,6 +331,14 @@ export default function App() {
   const [queueStatus, setQueueStatus] = useState(null);
   const [queueStatusError, setQueueStatusError] = useState("");
   const [queueStatusUpdatedAt, setQueueStatusUpdatedAt] = useState(0);
+  const [showLiveConsole, setShowLiveConsole] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("ameb_show_live_console") === "1";
+  });
+  const [liveConsoleLines, setLiveConsoleLines] = useState([]);
+  const [liveConsoleAutoScroll, setLiveConsoleAutoScroll] = useState(true);
+  const [liveConsoleLevel, setLiveConsoleLevel] = useState("all");
+  const liveConsoleBodyRef = useRef(null);
   const tasksLoadedRef = useRef(false);
   const [selectedAssetId, setSelectedAssetId] = useState(null);
   const [selectedAssetIds, setSelectedAssetIds] = useState([]);
@@ -719,8 +729,28 @@ export default function App() {
   }, [projectSortKey, projectSortDir]);
   useEffect(() => {
     if (typeof window === "undefined") return;
+    window.localStorage.setItem("ameb_show_live_console", showLiveConsole ? "1" : "0");
+  }, [showLiveConsole]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
     window.localStorage.setItem("ameb_asset_filter_panels", JSON.stringify(assetFilterPanels));
   }, [assetFilterPanels]);
+  useEffect(() => {
+    fetchRecentLogs(200)
+      .then((data) => {
+        const items = Array.isArray(data?.items) ? data.items : [];
+        setLiveConsoleLines(items.slice(-LIVE_CONSOLE_MAX_LINES));
+      })
+      .catch((err) => {
+        console.error(err);
+      });
+  }, []);
+  useEffect(() => {
+    if (!showLiveConsole || !liveConsoleAutoScroll) return;
+    const node = liveConsoleBodyRef.current;
+    if (!node) return;
+    node.scrollTop = node.scrollHeight;
+  }, [showLiveConsole, liveConsoleAutoScroll, liveConsoleLines]);
   useEffect(() => {
     if (typeof document === "undefined") return undefined;
     if (!aboutOpen) return undefined;
@@ -844,9 +874,31 @@ export default function App() {
         console.error(err);
       }
     };
+    const onLog = (event) => {
+      try {
+        const payload = JSON.parse(event.data || "{}");
+        if ((payload.type || "log") !== "log") return;
+        const nextLine = {
+          ts: payload.ts || "",
+          level: String(payload.level || "INFO").toUpperCase(),
+          logger: payload.logger || "",
+          message: String(payload.message || ""),
+        };
+        setLiveConsoleLines((prev) => {
+          const next = [...prev, nextLine];
+          if (next.length > LIVE_CONSOLE_MAX_LINES) {
+            return next.slice(next.length - LIVE_CONSOLE_MAX_LINES);
+          }
+          return next;
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    };
     evt.addEventListener("upload", onUpload);
     evt.addEventListener("projects_import", onProjectsImport);
     evt.addEventListener("tags_import", onTagsImport);
+    evt.addEventListener("log", onLog);
     evt.onerror = () => {
       evt.close();
     };
@@ -854,6 +906,7 @@ export default function App() {
       evt.removeEventListener("upload", onUpload);
       evt.removeEventListener("projects_import", onProjectsImport);
       evt.removeEventListener("tags_import", onTagsImport);
+      evt.removeEventListener("log", onLog);
       evt.close();
     };
   }, []);
@@ -2818,6 +2871,12 @@ function formatSizeGb(bytes) {
       : "startup import scanning"
     : "";
   const queueTopLabelWithStartup = startupImportText ? `${queueTopLabel} | ${startupImportText}` : queueTopLabel;
+  const visibleLiveConsoleLines = useMemo(() => {
+    if (liveConsoleLevel === "all") return liveConsoleLines;
+    return liveConsoleLines.filter(
+      (line) => String(line?.level || "").toLowerCase() === liveConsoleLevel
+    );
+  }, [liveConsoleLines, liveConsoleLevel]);
   return (
     <div className="app-shell" style={{ "--sidebar-width": `${settings.sidebar_width || 280}px` }}>
       <nav className="navbar navbar-dark bg-dark navbar-expand">
@@ -5768,11 +5827,79 @@ function formatSizeGb(bytes) {
             </div>
           </div>
         )}
+        {showLiveConsole ? (
+          <div className="live-console">
+            <div className="live-console-header">
+              <div className="live-console-title">Live Console</div>
+              <div className="live-console-actions">
+                <select
+                  className="form-select form-select-sm live-console-level"
+                  value={liveConsoleLevel}
+                  onChange={(e) => setLiveConsoleLevel(e.target.value)}
+                  title="Filter log level"
+                >
+                  <option value="all">All</option>
+                  <option value="info">Info</option>
+                  <option value="warning">Warning</option>
+                  <option value="error">Error</option>
+                </select>
+                <label className="filter-item live-console-autoscroll">
+                  <input
+                    type="checkbox"
+                    checked={liveConsoleAutoScroll}
+                    onChange={(e) => setLiveConsoleAutoScroll(e.target.checked)}
+                  />
+                  Auto
+                </label>
+                <button
+                  className="btn btn-outline-dark btn-sm"
+                  type="button"
+                  onClick={() => setLiveConsoleLines([])}
+                  title="Clear console output"
+                >
+                  Clear
+                </button>
+                <button
+                  className="btn btn-outline-dark btn-sm"
+                  type="button"
+                  onClick={() => setShowLiveConsole(false)}
+                  title="Hide live console"
+                >
+                  Hide
+                </button>
+              </div>
+            </div>
+            <div className="live-console-body" ref={liveConsoleBodyRef}>
+              {visibleLiveConsoleLines.length ? (
+                visibleLiveConsoleLines.map((line, idx) => (
+                  <div key={`${line.ts || "ts"}-${idx}`} className={`live-console-line level-${String(line.level || "").toLowerCase()}`}>
+                    <span className="live-console-ts">{line.ts || ""}</span>
+                    <span className="live-console-lvl">{line.level || "INFO"}</span>
+                    <span className="live-console-src">{line.logger || "-"}</span>
+                    <span className="live-console-msg">{line.message || ""}</span>
+                  </div>
+                ))
+              ) : (
+                <div className="live-console-empty">No log output yet.</div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <button
+            className="live-console-toggle"
+            type="button"
+            onClick={() => setShowLiveConsole(true)}
+            title="Show live console"
+          >
+            Console
+          </button>
+        )}
         <ToastContainer position="bottom-right" autoClose={3500} hideProgressBar={false} newestOnTop />
         {view !== "settings" && (
           <button
             className="scroll-top-fab"
             type="button"
+            style={showLiveConsole ? { bottom: "calc(34vh + 10px)" } : undefined}
             onClick={() => {
               lastAssetScrollYRef.current = null;
               window.scrollTo({ top: 0, behavior: "smooth" });

@@ -18,6 +18,7 @@ import time
 import webbrowser
 import uuid
 import zipfile
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 import re
@@ -98,6 +99,8 @@ PROJECT_DIR_SOURCE_MIN_BYTES = 50 * 1024 * 1024
 
 _event_queues: List["queue.Queue[str]"] = []
 _event_lock = threading.Lock()
+_log_buffer: "deque[Dict[str, Any]]" = deque(maxlen=500)
+_log_buffer_lock = threading.Lock()
 
 
 def _broadcast_event(payload: Dict[str, Any]) -> None:
@@ -108,6 +111,40 @@ def _broadcast_event(payload: Dict[str, Any]) -> None:
                 q.put_nowait(data)
             except queue.Full:
                 pass
+
+
+class _SSELogHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            rendered = self.format(record)
+        except Exception:
+            rendered = record.getMessage()
+        payload = {
+            "type": "log",
+            "level": str(record.levelname or "INFO").upper(),
+            "logger": record.name,
+            "message": rendered,
+            "ts": datetime.utcnow().isoformat() + "Z",
+        }
+        with _log_buffer_lock:
+            _log_buffer.append(payload)
+        _broadcast_event(payload)
+
+
+def _setup_live_log_stream() -> None:
+    root_logger = logging.getLogger()
+    for existing in root_logger.handlers:
+        if isinstance(existing, _SSELogHandler):
+            return
+    handler = _SSELogHandler()
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(
+        logging.Formatter("%(name)s | %(message)s")
+    )
+    root_logger.addHandler(handler)
+
+
+_setup_live_log_stream()
 
 
 def _archive_batch_output(
@@ -5770,6 +5807,13 @@ def stream_events() -> StreamingResponse:
         "X-Accel-Buffering": "no",
     }
     return StreamingResponse(_event_stream(), media_type="text/event-stream", headers=headers)
+
+
+@app.get("/logs/recent")
+def get_recent_logs(limit: int = Query(200, ge=1, le=1000)) -> Dict[str, Any]:
+    with _log_buffer_lock:
+        items = list(_log_buffer)[-int(limit):]
+    return {"items": items}
 
 
 @app.post("/events/notify")

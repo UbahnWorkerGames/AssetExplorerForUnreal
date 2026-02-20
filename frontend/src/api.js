@@ -320,6 +320,13 @@ export async function fetchQueueStatus() {
   return handleJson(res);
 }
 
+export async function fetchRecentLogs(limit = 200) {
+  const url = new URL(`${API_BASE}/logs/recent`);
+  if (limit) url.searchParams.set("limit", String(limit));
+  const res = await fetch(url, { cache: "no-store" });
+  return handleJson(res);
+}
+
 export async function enqueueOpenAiRecovery({ flow, taskId, limit = 300, staleMinutes = 180 } = {}) {
   const url = new URL(`${API_BASE}/openai/recover-enqueue`);
   if (flow) url.searchParams.set("flow", flow);
