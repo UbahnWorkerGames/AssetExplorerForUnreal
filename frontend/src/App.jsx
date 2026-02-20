@@ -35,17 +35,10 @@ import {
   regenerateEmbeddingsAll,
   testLlmTags,
   regenerateProjectEmbeddings,
-  retagProject,
-  tagProjectMissing,
-  tagMissingAllProjects,
   translateProjectNameTags,
   translateProjectNameTagsMissing,
   translateAllNameTags,
   translateAllNameTagsMissing,
-  nameTagsProjectSimple,
-  nameTagsAllSimple,
-  nameTagsProjectSimpleMissing,
-  nameTagsAllSimpleMissing,
   translateProjectTags,
   translateAllTags,
   translateProjectTagsMissing,
@@ -68,7 +61,6 @@ import {
   faCopy,
   faEye,
   faFolderOpen,
-  faHardDrive,
   faImages,
   faLightbulb,
 } from "@fortawesome/free-regular-svg-icons";
@@ -84,19 +76,12 @@ const isTrue = (value) => String(value).toLowerCase() === "true" || value === tr
 const taskLabelMap = {
   embeddings_all: "Rebuild semantic (all)",
   embeddings_project: "Rebuild semantic (project)",
-  tag_project_missing: "AI tag missing",
-  tag_project_retag: "Tag all",
-  tag_missing_all: "AI tag missing (all)",
   name_tags_all: "Asset title to tags (all)",
   name_tags_project: "Asset title to tags (project)",
   name_tags_all_missing: "Asset title to tags missing (all)",
   name_tags_project_missing: "Asset title to tags missing (project)",
-  name_tags_all_simple: "Name to tags (all)",
-  name_tags_project_simple: "Name to tags (project)",
   tags_translate_all: "Translate tags (all)",
   tags_translate_project: "Translate tags (project)",
-  name_tags_all_simple_missing: "Name to tags missing (all)",
-  name_tags_project_simple_missing: "Name to tags missing (project)",
   tags_translate_all_missing: "Translate tags missing (all)",
   tags_translate_project_missing: "Translate tags missing (project)",
 };
@@ -1927,23 +1912,6 @@ export default function App() {
       toast.error(`Tag generation failed: ${err.message || "unknown error"}`);
     }
   }
-  async function handleTagMissing(projectId) {
-    try {
-      await tagProjectMissing(projectId);
-      setProjectTagStatus((prev) => ({ ...prev, [projectId]: { status: "queued", done: 0, total: 0, errors: 0 } }));
-    } catch (err) {
-      toast.error(`Tag missing failed: ${err.message || "unknown error"}`);
-    }
-  }
-  async function handleRetagAll(projectId) {
-    if (!window.confirm("Retag all assets? Existing tags will be replaced.")) return;
-    try {
-      await retagProject(projectId);
-      setProjectTagStatus((prev) => ({ ...prev, [projectId]: { status: "queued", done: 0, total: 0, errors: 0 } }));
-    } catch (err) {
-      toast.error(`Retag failed: ${err.message || "unknown error"}`);
-    }
-  }
   async function handleRegenerateProjectEmbeddings(projectId) {
     try {
       await regenerateProjectEmbeddings(projectId);
@@ -1976,25 +1944,6 @@ export default function App() {
       await handleRestartServer(false);
     }
   }
-  async function handleTagMissingAllProjects() {
-    const missingAssets = Number(tagStatsAggregate?.assetsWithoutTags || 0);
-    const totalAssets = Number(tagStatsAggregate?.totalAssets || 0);
-    const confirmMessage = missingAssets > 0
-      ? `Tag missing assets for all projects? This targets about ${missingAssets} assets without tags${totalAssets > 0 ? ` (of ${totalAssets} total)` : ""} and may take a while.`
-      : "Tag missing assets for all projects? This can take a while.";
-    if (!window.confirm(confirmMessage)) return;
-    try {
-      await tagMissingAllProjects();
-      if (tagBatchDeferredOnRestart) {
-        toast.info("Tagging missing assets for all projects... Batch results are downloaded now and applied on next restart.");
-        await maybeOfferRestartForDeferredTagAction("Tagging missing assets");
-      } else {
-        toast.info("Tagging missing assets for all projects...");
-      }
-    } catch (err) {
-      toast.error(`Tag missing failed: ${err.message || "unknown error"}`);
-    }
-  }
   async function handleTranslateNameTagsAll() {
     if (!window.confirm("Translate asset names to tags (LLM) for all projects?")) return;
     try {
@@ -2021,34 +1970,6 @@ export default function App() {
       }
     } catch (err) {
       toast.error(`Translate names missing failed: ${err.message || "unknown error"}`);
-    }
-  }
-  async function handleNameTagsAllSimple() {
-    if (!window.confirm("Generate tags from asset names for all projects? (no translation)")) return;
-    try {
-      await nameTagsAllSimple();
-      if (tagBatchDeferredOnRestart) {
-        toast.info("Generating tags from names (all projects)... Batch results are downloaded now and applied on next restart.");
-        await maybeOfferRestartForDeferredTagAction("Generating tags from names");
-      } else {
-        toast.info("Generating tags from names (all projects)...");
-      }
-    } catch (err) {
-      toast.error(`Name->tags failed: ${err.message || "unknown error"}`);
-    }
-  }
-  async function handleNameTagsAllSimpleMissing() {
-    if (!window.confirm("Generate tags from names only for assets with too few tags?")) return;
-    try {
-      await nameTagsAllSimpleMissing();
-      if (tagBatchDeferredOnRestart) {
-        toast.info("Generating missing name-based tags (all projects)... Batch results are downloaded now and applied on next restart.");
-        await maybeOfferRestartForDeferredTagAction("Generating missing name-based tags");
-      } else {
-        toast.info("Generating missing name-based tags (all projects)...");
-      }
-    } catch (err) {
-      toast.error(`Name->tags missing failed: ${err.message || "unknown error"}`);
     }
   }
   async function handleTranslateAllTags() {
@@ -2137,22 +2058,6 @@ export default function App() {
       toast.info(`Recovery queued (task ${res.task_id})`);
     } catch (err) {
       toast.error(`Recovery enqueue failed: ${err.message || "unknown error"}`);
-    }
-  }
-  async function handleNameTagsProjectSimple(projectId) {
-    try {
-      await nameTagsProjectSimple(projectId);
-      toast.info("Generating tags from names...");
-    } catch (err) {
-      toast.error(`Name->tags failed: ${err.message || "unknown error"}`);
-    }
-  }
-  async function handleNameTagsProjectSimpleMissing(projectId) {
-    try {
-      await nameTagsProjectSimpleMissing(projectId);
-      toast.info("Generating missing name-based tags...");
-    } catch (err) {
-      toast.error(`Name->tags missing failed: ${err.message || "unknown error"}`);
     }
   }
   async function handleTranslateTagsProject(projectId) {
