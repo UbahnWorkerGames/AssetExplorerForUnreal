@@ -145,16 +145,21 @@ class _SSELogHandler(logging.Handler):
 
 
 def _setup_live_log_stream() -> None:
-    root_logger = logging.getLogger()
-    for existing in root_logger.handlers:
-        if isinstance(existing, _SSELogHandler):
-            return
     handler = _SSELogHandler()
     handler.setLevel(logging.INFO)
-    handler.setFormatter(
-        logging.Formatter("%(name)s | %(message)s")
-    )
-    root_logger.addHandler(handler)
+    handler.setFormatter(logging.Formatter("%(name)s | %(message)s"))
+
+    targets = [
+        logging.getLogger(),
+        logging.getLogger("uvicorn"),
+        logging.getLogger("uvicorn.error"),
+        logging.getLogger("uvicorn.access"),
+        logging.getLogger("fastapi"),
+    ]
+    for target in targets:
+        if any(isinstance(existing, _SSELogHandler) for existing in target.handlers):
+            continue
+        target.addHandler(handler)
 
 
 _setup_live_log_stream()
