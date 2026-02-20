@@ -1737,9 +1737,9 @@ export default function App() {
       setRefreshingProjectSizes(false);
     }
   }
-  async function handleRestartServer() {
+  async function handleRestartServer(confirmFirst = true) {
     if (restartingServer) return;
-    if (!window.confirm("Restart backend server now?")) return;
+    if (confirmFirst && !window.confirm("Restart backend server now?")) return;
     setRestartingServer(true);
     try {
       await restartServer();
@@ -1912,6 +1912,12 @@ export default function App() {
     try {
       await regenerateEmbeddingsAll();
       toast.info("Semantic rebuild scheduled for next server restart.");
+      const shouldRestart = window.confirm(
+        "Semantic rebuild runs on next restart. Restart backend now?"
+      );
+      if (shouldRestart) {
+        await handleRestartServer(false);
+      }
     } catch (err) {
       toast.error(`Embedding regen failed: ${err.message || "unknown error"}`);
     }
