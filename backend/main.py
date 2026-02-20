@@ -3214,22 +3214,21 @@ def _generate_project_setcard(project: Dict[str, Any], settings: Dict[str, Any])
                 pass
 
         full_page_count = max(1, math.ceil(len(images) / items_per_page))
-        page_count = 1 if single_image_only else full_page_count
         gap = max(2, tile_px // 32)
         grid_w = cols * tile_px + (cols - 1) * gap
         title_band = max(26, tile_px // 6)
-        footer_band = max(16, tile_px // 2)
         canvas_w = grid_w + gap * 2
         font = ImageFont.load_default()
         logo_path = BASE_DIR / "frontend" / "src" / "assets" / "logo64.png"
         output_paths: List[str] = []
         grid_x = gap
 
-        for page_idx in range(page_count):
-            page_images = images[page_idx * items_per_page : (page_idx + 1) * items_per_page]
-            effective_rows = max(1, min(rows_per_page, math.ceil(len(page_images) / cols)))
+        def _render_setcard(page_images: List[Path], page_label: str, file_name: str) -> Optional[str]:
+            if not page_images:
+                return None
+            effective_rows = max(1, math.ceil(len(page_images) / cols))
             grid_h = effective_rows * tile_px + (effective_rows - 1) * gap
-            canvas_h = grid_h + title_band + footer_band + gap * 2
+            canvas_h = grid_h + title_band + gap * 2
             grid_y = title_band + gap
             canvas = Image.new("RGB", (canvas_w, canvas_h), (16, 16, 18))
             draw = ImageDraw.Draw(canvas)
@@ -3252,26 +3251,47 @@ def _generate_project_setcard(project: Dict[str, Any], settings: Dict[str, Any])
                 except Exception:
                     continue
 
-            title = project.get("name") or "Project"
-            page_label = f"{title} ({page_idx + 1}/{full_page_count})" if full_page_count > 1 else title
             draw.text((8, 8), page_label, fill=(240, 240, 240), font=font)
 
             if logo_path.exists():
                 try:
                     with Image.open(logo_path) as logo:
                         logo = logo.convert("RGBA")
-                        logo_size = max(48, min(192, int(tile_px * 0.45)))
+                        logo_size = max(32, min(96, int(tile_px * 0.31)))
+                        inset = max(4, tile_px // 24)
+                        logo_size = min(logo_size, max(24, tile_px - inset * 2))
                         logo = logo.resize((logo_size, logo_size), Image.LANCZOS)
-                        lx = canvas_w - logo_size - 12
-                        ly = title_band + gap + grid_h + max(4, (footer_band - logo_size) // 2)
+                        last_idx = len(page_images) - 1
+                        last_r = last_idx // cols
+                        last_c = last_idx % cols
+                        last_x0 = grid_x + last_c * (tile_px + gap)
+                        last_y0 = grid_y + last_r * (tile_px + gap)
+                        lx = last_x0 + tile_px - logo_size - inset
+                        ly = last_y0 + tile_px - logo_size - inset
                         canvas.paste(logo, (lx, ly), logo)
                 except Exception:
                     pass
 
-            file_name = "setcard.png" if page_idx == 0 else f"setcard_{page_idx + 1:02d}.png"
             out_path = folder_path / file_name
             canvas.save(out_path, "PNG")
-            output_paths.append(str(out_path))
+            return str(out_path)
+
+        title = project.get("name") or "Project"
+        overview_label = title if full_page_count == 1 else f"{title} (all)"
+        overview = _render_setcard(images, overview_label, "setcard.png")
+        if overview:
+            output_paths.append(overview)
+
+        if not single_image_only and full_page_count > 1:
+            for page_idx in range(full_page_count):
+                page_images = images[page_idx * items_per_page : (page_idx + 1) * items_per_page]
+                if not page_images:
+                    continue
+                page_label = f"{title} ({page_idx + 1}/{full_page_count})"
+                page_file = f"setcard_{page_idx + 2:02d}.png"
+                page_path = _render_setcard(page_images, page_label, page_file)
+                if page_path:
+                    output_paths.append(page_path)
 
         return output_paths
     except Exception as exc:
