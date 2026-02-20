@@ -76,10 +76,10 @@ const isTrue = (value) => String(value).toLowerCase() === "true" || value === tr
 const taskLabelMap = {
   embeddings_all: "Rebuild semantic (all)",
   embeddings_project: "Rebuild semantic (project)",
-  name_tags_all: "Asset title to tags (all)",
-  name_tags_project: "Asset title to tags (project)",
-  name_tags_all_missing: "Asset title to tags missing (all)",
-  name_tags_project_missing: "Asset title to tags missing (project)",
+  name_tags_all: "Name -> tags (LLM, all)",
+  name_tags_project: "Name -> tags (LLM, project)",
+  name_tags_all_missing: "Name -> tags missing (LLM, all)",
+  name_tags_project_missing: "Name -> tags missing (LLM, project)",
   tags_translate_all: "Translate tags (all)",
   tags_translate_project: "Translate tags (project)",
   tags_translate_all_missing: "Translate tags missing (all)",
@@ -3785,18 +3785,18 @@ function formatSizeGb(bytes) {
                             type="button"
                             onClick={handleTranslateNameTagsAll}
                             disabled={!llmReady}
-                            title={withLlmTitle("Use LLM to generate title-like tags from asset names for all projects.")}
+                            title={withLlmTitle("Use LLM to derive tags from asset names for all projects and append them to tags.")}
                           >
-                          Asset title (all)
+                          Name -&gt; tags (all)
                           </button>
                           <button
                             className="btn btn-outline-dark btn-sm"
                             type="button"
                             onClick={handleTranslateNameTagsAllMissing}
                             disabled={!llmReady}
-                            title={withLlmTitle("Use LLM to generate title-like tags from asset names only where this action has not run yet (name_translate_tags_done_at missing).")}
+                            title={withLlmTitle("Use LLM to derive tags from asset names only where this action has not run yet (name_translate_tags_done_at missing).")}
                           >
-                          Asset title missing (all)
+                          Name -&gt; tags missing (all)
                           </button>
                           <button
                             className="btn btn-outline-dark btn-sm"
@@ -4212,18 +4212,18 @@ function formatSizeGb(bytes) {
                                       type="button"
                                       onClick={() => handleTranslateNameTagsProject(project.id)}
                                       disabled={!llmReady}
-                                      title={withLlmTitle("Use LLM to generate title-like tags from asset names for all assets in this project.")}
+                                      title={withLlmTitle("Use LLM to derive tags from asset names for all assets in this project and append them to tags.")}
                                     >
-                                      Asset title
+                                      Name -&gt; tags
                                     </button>
                                     <button
                                       className="btn btn-outline-dark btn-sm"
                                       type="button"
                                       onClick={() => handleTranslateNameTagsProjectMissing(project.id)}
                                       disabled={!llmReady}
-                                      title={withLlmTitle("Use LLM to generate title-like tags from asset names only where this action has not run yet in this project (name_translate_tags_done_at missing).")}
+                                      title={withLlmTitle("Use LLM to derive tags from asset names only where this action has not run yet in this project (name_translate_tags_done_at missing).")}
                                     >
-                                      Asset title missing
+                                      Name -&gt; tags missing
                                     </button>
                                     <button
                                       className="btn btn-outline-dark btn-sm"

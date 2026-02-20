@@ -134,8 +134,8 @@ Global row:
 
 LLM row (provider-dependent):
 
-- `Asset title`: LLM name-to-tag generation for all assets in the project.
-- `Asset title missing`: same, but only where `name_translate_tags_done_at` is missing.
+- `Name -> tags`: uses LLM to derive tags from asset names for all assets in the project (appends to tags).
+- `Name -> tags missing`: same, but only where `name_translate_tags_done_at` is missing.
 - `Translate tags`: LLM translation of existing tags for all assets in the project.
 - `Translate tags missing`: same, but only where `translate_tags_done_at` is missing.
 
