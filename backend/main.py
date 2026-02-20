@@ -3191,16 +3191,15 @@ def _generate_project_setcard(project: Dict[str, Any], settings: Dict[str, Any])
         title_band = max(26, tile_px // 6)
         canvas_w = grid_w + gap * 2
         canvas_h = grid_h + title_band + gap * 2
-        size_px = max(canvas_w, canvas_h)
         font = ImageFont.load_default()
         logo_path = BASE_DIR / "frontend" / "src" / "assets" / "logo64.png"
         output_paths: List[str] = []
-        grid_x = (size_px - grid_w) // 2
-        grid_y = title_band + max(gap, (size_px - title_band - grid_h) // 2)
+        grid_x = gap
+        grid_y = title_band + gap
 
         for page_idx in range(page_count):
             page_images = images[page_idx * items_per_page : (page_idx + 1) * items_per_page]
-            canvas = Image.new("RGB", (size_px, size_px), (16, 16, 18))
+            canvas = Image.new("RGB", (canvas_w, canvas_h), (16, 16, 18))
             draw = ImageDraw.Draw(canvas)
             for idx, img_path in enumerate(page_images):
                 r = idx // cols
@@ -3229,10 +3228,10 @@ def _generate_project_setcard(project: Dict[str, Any], settings: Dict[str, Any])
                 try:
                     with Image.open(logo_path) as logo:
                         logo = logo.convert("RGBA")
-                        logo_size = max(36, min(128, size_px // 18))
+                        logo_size = max(36, min(128, min(canvas_w, canvas_h) // 18))
                         logo = logo.resize((logo_size, logo_size), Image.LANCZOS)
-                        lx = size_px - logo_size - 12
-                        ly = size_px - logo_size - 12
+                        lx = canvas_w - logo_size - 12
+                        ly = canvas_h - logo_size - 12
                         canvas.paste(logo, (lx, ly), logo)
                 except Exception:
                     pass
