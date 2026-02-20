@@ -3876,7 +3876,7 @@ function formatSizeGb(bytes) {
                       <option value="source_folder">Sort: Source pack folder</option>
                     </select>
                     <button
-                      className="btn btn-outline-dark btn-sm"
+                      className="btn btn-outline-dark btn-sm project-sort-dir-btn"
                       type="button"
                       onClick={() =>
                         setProjectSortDir((prev) => (prev === "asc" ? "desc" : "asc"))
