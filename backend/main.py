@@ -1593,6 +1593,9 @@ def _task_progress(
     message: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
+    # After a cancel request, suppress further "running" progress noise.
+    if status == "running" and _task_cancelled(task_id):
+        return
     payload = {"status": status, "total": total, "done": done, "errors": errors}
     if extra:
         payload.update(extra)
@@ -1621,6 +1624,16 @@ def _task_progress(
             total,
             errors,
         )
+
+
+def _task_finish_done_or_canceled(task_id: int) -> None:
+    row = _task_get(task_id)
+    if not row:
+        return
+    if row.get("cancel_flag") or str(row.get("status") or "").lower() == "canceled":
+        _task_update(task_id, status="canceled", finished_at=now_iso())
+    else:
+        _task_update(task_id, status="done", finished_at=now_iso())
 
 
 def _enqueue_task(kind: str, target_id: Optional[int] = None, message: Optional[str] = None) -> int:
@@ -1687,10 +1700,10 @@ def _task_worker() -> None:
                 _task_update(task_id, status="done", finished_at=now_iso())
             elif kind == "tag_project_missing":
                 _tag_project_assets(int(target_id), "missing", task_id=task_id)
-                _task_update(task_id, status="done", finished_at=now_iso())
+                _task_finish_done_or_canceled(task_id)
             elif kind == "tag_project_retag":
                 _tag_project_assets(int(target_id), "retag", task_id=task_id)
-                _task_update(task_id, status="done", finished_at=now_iso())
+                _task_finish_done_or_canceled(task_id)
             elif kind == "tag_missing_all":
                 _tag_all_projects("missing", task_id=task_id)
                 _task_update(task_id, status="done", finished_at=now_iso())
@@ -2337,6 +2350,10 @@ def _run_batch_tagging(
                 return
             progressed = False
             for batch_id in list(pending.keys()):
+                if task_id is not None and _task_cancelled(task_id):
+                    _set_tag_progress(project_id, {"status": "canceled", "total": total, "done": done, "errors": errors})
+                    _task_progress(task_id, "canceled", total, done, errors)
+                    return
                 info = pending[batch_id]
                 chunk = info["chunk"]
                 offset = int(info.get("offset") or 0)
