@@ -4107,7 +4107,7 @@ function formatSizeGb(bytes) {
                               value={editLink}
                               onChange={(e) => setEditLink(e.target.value)}
                             />
-                            <label className="form-label">Screenshot URL (optional)</label>
+                            <label className="form-label">Screenshot URL</label>
                             <input
                               className="form-control"
                               placeholder="Screenshot URL"
@@ -4139,7 +4139,7 @@ function formatSizeGb(bytes) {
                               value={editSourcePath}
                               onChange={(e) => setEditSourcePath(e.target.value)}
                             />
-                            <label className="form-label">Source pack folder (optional)</label>
+                            <label className="form-label">Source pack folder</label>
                             <input
                               className="form-control"
                               placeholder="Source pack folder"
