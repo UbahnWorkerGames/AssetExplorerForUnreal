@@ -4078,7 +4078,7 @@ function formatSizeGb(bytes) {
                   </div>
                 </div>
               </div>
-              <div className="project-list-wrap row g-3">
+              <div className="project-list-wrap">
                 {sortedProjects.map((project) => {
                   const folderLabel = project.source_path
                     ? project.source_path.split(/[/\\]+/).filter(Boolean).pop()
@@ -4086,10 +4086,7 @@ function formatSizeGb(bytes) {
                       ? project.folder_path.split(/[/\\]+/).filter(Boolean).pop()
                       : "-";
                   return (
-                    <div
-                      key={project.id}
-                      className={`col-12 col-md-6 ${sortedProjects.length === 3 ? "col-lg-4" : "col-lg-3"}`}
-                    >
+                    <div key={project.id} className="project-list-cell">
                       <div
                         className="card project-item h-100"
                         onContextMenu={(e) => {

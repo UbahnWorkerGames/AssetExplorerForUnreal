@@ -4274,8 +4274,10 @@ def _tag_project_assets(
             tags = _normalize_tags(tags)
             _maybe_set_project_era(project_id, era)
             translated_tags = _translate_tags_if_enabled(settings, tags)
-            embedding_text = _build_embedding_text(row["name"], row["description"] or "", tags, translated_tags)
-            embedding = embed_text(embedding_text)
+            embedding = None
+            if _should_generate_embeddings_on_import(settings):
+                embedding_text = _build_embedding_text(row["name"], row["description"] or "", tags, translated_tags)
+                embedding = embed_text(embedding_text)
             batch.append({
                 "id": row["id"],
                 "tags": tags,
@@ -8581,14 +8583,19 @@ def update_asset_tags(asset_id: int, payload: AssetTagUpdate) -> Dict[str, Any]:
 
     translated_tags = _translate_tags_if_enabled(settings, tags)
     merged_tags = _merge_tags_for_asset(tags, translated_tags)
-    embedding_text = _build_embedding_text(asset["name"], asset["description"] or "", tags, translated_tags)
-    embedding = embed_text(embedding_text)
-
     cur = conn.cursor()
-    cur.execute(
-        "UPDATE assets SET tags_json = ?, embedding_json = ? WHERE id = ?",
-        (json.dumps(merged_tags), json.dumps(embedding), asset_id),
-    )
+    if _should_generate_embeddings_on_import(settings):
+        embedding_text = _build_embedding_text(asset["name"], asset["description"] or "", tags, translated_tags)
+        embedding = embed_text(embedding_text)
+        cur.execute(
+            "UPDATE assets SET tags_json = ?, embedding_json = ? WHERE id = ?",
+            (json.dumps(merged_tags), json.dumps(embedding), asset_id),
+        )
+    else:
+        cur.execute(
+            "UPDATE assets SET tags_json = ?, embedding_json = NULL WHERE id = ?",
+            (json.dumps(merged_tags), asset_id),
+        )
     _upsert_asset_tags(
         conn,
         asset_id,
@@ -8722,15 +8729,20 @@ def generate_asset_tags(asset_id: int) -> Dict[str, Any]:
     _maybe_set_project_era(row["project_id"], era)
     translated_tags = _translate_tags_if_enabled(settings, tags)
     merged_tags = _merge_tags_for_asset(tags, translated_tags)
-    embedding_text = _build_embedding_text(row["name"], row["description"] or "", tags, translated_tags)
-    embedding = embed_text(embedding_text)
-
     conn = get_db()
     cur = conn.cursor()
-    cur.execute(
-        "UPDATE assets SET tags_json = ?, embedding_json = ? WHERE id = ?",
-        (json.dumps(merged_tags), json.dumps(embedding), asset_id),
-    )
+    if _should_generate_embeddings_on_import(settings):
+        embedding_text = _build_embedding_text(row["name"], row["description"] or "", tags, translated_tags)
+        embedding = embed_text(embedding_text)
+        cur.execute(
+            "UPDATE assets SET tags_json = ?, embedding_json = ? WHERE id = ?",
+            (json.dumps(merged_tags), json.dumps(embedding), asset_id),
+        )
+    else:
+        cur.execute(
+            "UPDATE assets SET tags_json = ?, embedding_json = NULL WHERE id = ?",
+            (json.dumps(merged_tags), asset_id),
+        )
     _upsert_asset_tags(
         conn,
         asset_id,
