@@ -4922,7 +4922,7 @@ def _project_screenshot_url_from_path(path_value: Optional[str]) -> str:
         return ""
     try:
         rel = Path(path_value).resolve().relative_to(DATA_DIR.resolve())
-        return f"/media/{str(rel).replace('\\', '/')}"
+        return f"/media/{rel.as_posix()}"
     except ValueError:
         return ""
 
