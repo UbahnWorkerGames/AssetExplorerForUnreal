@@ -664,7 +664,7 @@ export default function App() {
     export_capture360_discard_frames: 2,
     export_upload_after_export: true,
     export_upload_path_template: "/assets/upload",
-    export_check_path_template: "/assets/exists?hash={hash}&hash_type=blake3",
+    export_check_path_template: "/assets/exists?hash={hash}&hash_type=blake3&project_id={project_id}",
     ue_cmd_path: "",
     ue_cmd_extra_args: "",
     tag_language: "english",

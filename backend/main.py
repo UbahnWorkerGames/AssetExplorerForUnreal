@@ -7164,6 +7164,10 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
         masked["import_base_url"] = "http://127.0.0.1:9090"
     if "ue_cmd_path" not in masked:
         masked["ue_cmd_path"] = ""
+    default_export_check = "/assets/exists?hash={hash}&hash_type=blake3&project_id={project_id}"
+    current_export_check = str(masked.get("export_check_path_template") or "").strip()
+    if not current_export_check or current_export_check == "/assets/exists?hash={hash}&hash_type=blake3":
+        masked["export_check_path_template"] = default_export_check
     if "skip_export_if_on_server" in masked:
         raw = str(masked.get("skip_export_if_on_server") or "").strip().lower()
         masked["skip_export_if_on_server"] = raw in {"1", "true", "yes", "on"}
@@ -7952,7 +7956,7 @@ def _run_tags_import_task(task_id: int) -> None:
 
 
 @app.get("/assets/exists")
-def asset_exists(hash: str, hash_type: str = "blake3") -> Dict[str, Any]:
+def asset_exists(hash: str, hash_type: str = "blake3", project_id: Optional[int] = None) -> Dict[str, Any]:
     if not hash:
         raise HTTPException(status_code=400, detail="hash is required")
     column = _resolve_hash_column(hash_type)
@@ -7969,10 +7973,46 @@ def asset_exists(hash: str, hash_type: str = "blake3") -> Dict[str, Any]:
             False,
         )
         return {"exists": False, "id": None}
-    row = fetch_one(conn, f"SELECT id FROM assets WHERE {column} = ? LIMIT 1", (hash,))
+    if project_id is None:
+        conn.close()
+        logger.info(
+            "assets/exists hash=%s hash_type=%s exists=%s (project scoped check requires project_id)",
+            hash,
+            hash_type,
+            False,
+        )
+        return {"exists": False, "id": None, "count": 0, "project_id": None, "sample_project_ids": []}
+    pid = int(project_id)
+    row = fetch_one(
+        conn,
+        f"SELECT id, project_id FROM assets WHERE {column} = ? AND project_id = ? ORDER BY id DESC LIMIT 1",
+        (hash, pid),
+    )
+    count_row = fetch_one(conn, f"SELECT COUNT(*) AS count FROM assets WHERE {column} = ? AND project_id = ?", (hash, pid))
+    sample_rows = fetch_all(
+        conn,
+        f"SELECT id, project_id FROM assets WHERE {column} = ? AND project_id = ? ORDER BY id DESC LIMIT 5",
+        (hash, pid),
+    )
     conn.close()
-    logger.info("assets/exists hash=%s hash_type=%s exists=%s", hash, hash_type, bool(row))
-    return {"exists": bool(row), "id": row["id"] if row else None}
+    count = int((count_row or {}).get("count") or 0)
+    sample_project_ids = [int(r.get("project_id") or 0) for r in sample_rows if r.get("project_id") is not None]
+    logger.info(
+        "assets/exists hash=%s hash_type=%s project_id=%s exists=%s count=%s sample_project_ids=%s",
+        hash,
+        hash_type,
+        pid,
+        bool(row),
+        count,
+        sample_project_ids,
+    )
+    return {
+        "exists": bool(row),
+        "id": row["id"] if row else None,
+        "count": count,
+        "project_id": row["project_id"] if row else None,
+        "sample_project_ids": sample_project_ids,
+    }
 
 
 @app.get("/tags/export")
