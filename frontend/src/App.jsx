@@ -652,6 +652,7 @@ export default function App() {
     groq_model: "",
     ollama_model: "",
     import_base_url: "http://127.0.0.1:9090",
+    server_mode_enabled: true,
     skip_export_if_on_server: true,
     export_overwrite_zips: false,
     export_default_image_count: 1,
@@ -1178,6 +1179,10 @@ export default function App() {
       if (clean.skip_export_if_on_server !== undefined) {
         const raw = String(clean.skip_export_if_on_server).toLowerCase();
         clean.skip_export_if_on_server = raw === "true" || raw === "1" || raw === "yes" || raw === "on";
+      }
+      if (clean.server_mode_enabled !== undefined) {
+        const raw = String(clean.server_mode_enabled).toLowerCase();
+        clean.server_mode_enabled = raw === "true" || raw === "1" || raw === "yes" || raw === "on";
       }
       if (clean.tag_translate_enabled !== undefined) {
         const raw = String(clean.tag_translate_enabled).toLowerCase();
@@ -2311,6 +2316,9 @@ export default function App() {
       };
       if (payload.skip_export_if_on_server !== undefined) {
         payload.skip_export_if_on_server = payload.skip_export_if_on_server ? "true" : "false";
+      }
+      if (payload.server_mode_enabled !== undefined) {
+        payload.server_mode_enabled = payload.server_mode_enabled ? "true" : "false";
       }
       if (payload.export_overwrite_zips !== undefined) {
         payload.export_overwrite_zips = payload.export_overwrite_zips ? "true" : "false";
@@ -4691,6 +4699,23 @@ function formatSizeGb(bytes) {
               <div className="settings-compact-group">
                 <div className="settings-compact-title">Core workflow + tags</div>
                 <div className="settings-compact-grid">
+                  <div className="settings-compact-item">
+                    <div className="form-check">
+                      <input
+                        className="form-check-input"
+                        type="checkbox"
+                        checked={isTrue(settings.server_mode_enabled)}
+                        onChange={(e) =>
+                          setSettings((prev) => ({ ...prev, server_mode_enabled: e.target.checked }))
+                        }
+                        title="Server mode: exports include real Content files and uploaded projects are treated as internal."
+                        id="serverModeEnabled"
+                      />
+                      <label className="form-check-label" htmlFor="serverModeEnabled">
+                        Server mode
+                      </label>
+                    </div>
+                  </div>
                   <div className="settings-compact-item">
                     <div className="form-check">
                       <input

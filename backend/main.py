@@ -1991,6 +1991,7 @@ class SettingsUpdate(BaseModel):
     export_anim_sequence_image_count: Optional[int] = None
     export_capture360_discard_frames: Optional[int] = None
     export_upload_after_export: Optional[bool] = None
+    server_mode_enabled: Optional[bool] = None
     export_upload_path_template: Optional[str] = None
     export_check_path_template: Optional[str] = None
     skip_export_if_on_server: Optional[bool] = None
@@ -5155,6 +5156,18 @@ def _find_project_by_source(
     source_path: Optional[str],
     source_folder: Optional[str],
 ) -> Optional[Dict[str, Any]]:
+    inferred_top = ""
+    if source_path:
+        try:
+            s = Path(source_path).expanduser()
+            parts = list(s.parts)
+            lower_parts = [p.lower() for p in parts]
+            if "content" in lower_parts:
+                idx = lower_parts.index("content")
+                if idx + 1 < len(parts):
+                    inferred_top = str(parts[idx + 1]).strip().lower()
+        except Exception:
+            inferred_top = ""
     if source_folder:
         cleaned = re.split(r"[\/]+", source_folder.strip().strip("/\\"))
         source_folder = cleaned[-1] if cleaned else source_folder
@@ -5176,11 +5189,19 @@ def _find_project_by_source(
         return None
     rows = fetch_all(conn, "SELECT * FROM projects")
     for row in rows:
+        folder_path = row.get("folder_path") or ""
+        row_source_folder = str(row.get("source_folder") or "").strip()
+        row_source_folder_name = Path(row_source_folder).name.strip().lower() if row_source_folder else ""
         row_values = [
             _normalize_path_value(row.get("source_path")),
             _normalize_path_value(row.get("source_folder")),
+            _normalize_path_value(folder_path),
+            _normalize_path_value(str(Path(folder_path) / "Content")) if folder_path else "",
+            _normalize_path_value(str(Path(folder_path) / "Content" / row_source_folder_name)) if folder_path and row_source_folder_name else "",
         ]
         if any(val and val in normalized for val in row_values):
+            return row
+        if inferred_top and row_source_folder_name and inferred_top == row_source_folder_name:
             return row
     return None
 
@@ -6856,6 +6877,7 @@ def update_settings(payload: SettingsUpdate) -> Dict[str, str]:
             continue
         if key in {
             "skip_export_if_on_server",
+            "server_mode_enabled",
             "purge_assets_on_startup",
             "serve_frontend",
             "tag_use_batch_mode",
@@ -7164,6 +7186,8 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
         masked["import_base_url"] = "http://127.0.0.1:9090"
     if "ue_cmd_path" not in masked:
         masked["ue_cmd_path"] = ""
+    if "server_mode_enabled" not in masked:
+        masked["server_mode_enabled"] = "true"
     default_export_check = "/assets/exists?hash={hash}&hash_type=blake3&source_path={source_path}"
     current_export_check = str(masked.get("export_check_path_template") or "").strip()
     if not current_export_check or current_export_check in {"/assets/exists?hash={hash}&hash_type=blake3", "/assets/exists?hash={hash}&hash_type=blake3&project_id={project_id}"}:
@@ -7177,6 +7201,9 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
     if "export_upload_after_export" in masked:
         raw = str(masked.get("export_upload_after_export") or "").strip().lower()
         masked["export_upload_after_export"] = raw in {"1", "true", "yes", "on"}
+    if "server_mode_enabled" in masked:
+        raw = str(masked.get("server_mode_enabled") or "").strip().lower()
+        masked["server_mode_enabled"] = raw in {"1", "true", "yes", "on"}
     if "serve_frontend" in masked:
         raw = str(masked.get("serve_frontend") or "").strip().lower()
         masked["serve_frontend"] = "true" if raw in {"1", "true", "yes", "on"} else "false"
@@ -7377,6 +7404,9 @@ def _upload_asset_sync(
 
     conn = get_db()
     try:
+        settings = get_settings(conn)
+        raw_server_mode = str(settings.get("server_mode_enabled") or "").strip().lower()
+        server_mode_enabled = raw_server_mode in {"1", "true", "yes", "on"}
         project_row = fetch_one(conn, "SELECT id, folder_path, source_path, source_folder FROM projects WHERE id = ?", (project_id,)) if project_id is not None else None
         if project_id is not None and not project_row:
             logger.warning("Upload project_id %s not found in DB", project_id)
@@ -7404,6 +7434,11 @@ def _upload_asset_sync(
                 else:
                     logger.warning("Upload rejected: project_id missing and could not be resolved (vendor/package=%s)", meta.get("package"))
                     raise HTTPException(status_code=400, detail="project_id missing and could not be resolved from meta")
+
+        if server_mode_enabled and project_id:
+            conn.execute("UPDATE projects SET source_preference = 'internal' WHERE id = ?", (int(project_id),))
+            _db_retry(conn.commit)
+            project_row = fetch_one(conn, "SELECT id, folder_path, source_path, source_folder FROM projects WHERE id = ?", (project_id,))
 
         existing = fetch_one(
             conn,
