@@ -25,6 +25,21 @@ Important:
   - Unreal plugin settings
   - UnrealAssetExplorer settings
 
+Project creation recommendation:
+
+- Prefer creating/syncing projects via Unreal export/import flow (AEB bridge or Epic/Fab import script), not by manual project creation in the UI.
+- Typical export calls are:
+  - `aeb /Game/`
+  - `aeb /Game/byHans1/MyPack/SM_Crate.SM_Crate`
+- This keeps `source_path` / `source_folder` mapping consistent and avoids duplicate/wrong project roots.
+
+Deep resolve roots (important for vendor packs like `SUBURBS`, `DECALS`, ...):
+
+- Setting: `export_resolve_deep_roots` (CSV) in UnrealAssetExplorer settings.
+- Default examples: `Dekogon_Industrial,SUBURBS,DECALS,BUILDINGS`
+- Behavior: if first folder under `Content/` matches this list, resolve one level deeper (or pick largest nested folder if multiple candidates exist).
+- Users should verify pack structure first and add missing root names to this CSV when needed.
+
 ## Tech Stack
 
 - Backend: Python, FastAPI, SQLite
