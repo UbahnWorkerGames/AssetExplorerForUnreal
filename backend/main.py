@@ -4848,7 +4848,7 @@ def _normalized_batch_size(value: Any, default: int = 500, upper: int = 50000) -
 def _should_generate_embeddings_on_import(settings: Dict[str, str]) -> bool:
     raw = settings.get("generate_embeddings_on_import")
     if raw is None or str(raw).strip() == "":
-        return True
+        return False
     return _bool_from_setting(raw)
 
 
@@ -7385,7 +7385,7 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
         raw = str(masked.get("generate_embeddings_on_import") or "").strip().lower()
         masked["generate_embeddings_on_import"] = "true" if raw in {"1", "true", "yes", "on"} else "false"
     else:
-        masked["generate_embeddings_on_import"] = "true"
+        masked["generate_embeddings_on_import"] = "false"
     if "default_full_project_copy" in masked:
         raw = str(masked.get("default_full_project_copy") or "").strip().lower()
         masked["default_full_project_copy"] = "true" if raw in {"1", "true", "yes", "on"} else "false"

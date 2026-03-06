@@ -687,7 +687,7 @@ export default function App() {
     tag_batch_project_concurrency: 3,
     tag_translate_enabled: false,
     tag_display_limit: 0,
-    generate_embeddings_on_import: true,
+    generate_embeddings_on_import: false,
     sidebar_width: 280,
     purge_assets_on_startup: false,
     use_temperature: false,
