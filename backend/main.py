@@ -4602,6 +4602,19 @@ def _resolve_source_paths(source_path: Optional[str], source_folder: Optional[st
         if resolved_source.parent.name.lower() == "content":
             # source_path points to a pack folder inside Content
             return {"project_root": resolved_source.parent.parent, "source_folder": resolved_source}
+        # source_path points somewhere deeper inside Content/<Pack>/...
+        parts = list(resolved_source.parts)
+        lower_parts = [p.lower() for p in parts]
+        if "content" in lower_parts:
+            idx = lower_parts.index("content")
+            if idx > 0 and idx + 1 < len(parts):
+                project_root = Path(*parts[:idx])
+                source_folder_path = Path(*parts[: idx + 2])
+                if source_folder and not source_folder_path.exists():
+                    candidate = project_root / "Content" / str(source_folder)
+                    if candidate.exists():
+                        source_folder_path = candidate
+                return {"project_root": project_root, "source_folder": source_folder_path}
 
     if resolved_folder and resolved_folder.exists():
         if resolved_folder.parent.name.lower() == "content":
@@ -4609,6 +4622,30 @@ def _resolve_source_paths(source_path: Optional[str], source_folder: Optional[st
         return {"project_root": None, "source_folder": resolved_folder}
 
     return {"project_root": resolved_source, "source_folder": resolved_folder}
+
+
+def _is_generic_pack_folder_name(name: str) -> bool:
+    n = str(name or "").strip().lower()
+    return n in {
+        "blueprint",
+        "blueprints",
+        "mesh",
+        "meshes",
+        "material",
+        "materials",
+        "texture",
+        "textures",
+        "fx",
+        "vfx",
+        "effects",
+        "audio",
+        "sound",
+        "sounds",
+        "animation",
+        "animations",
+        "niagara",
+        "particles",
+    }
 
 def _collect_extra_content_roots(project_id: int, primary_root: Optional[str]) -> List[str]:
     conn = get_db()
@@ -5168,7 +5205,9 @@ def _find_project_by_source(
                 if idx + 1 < len(parts):
                     inferred_top = str(parts[idx + 1]).strip().lower()
                 if idx + 2 < len(parts):
-                    inferred_pack = str(parts[idx + 2]).strip().lower()
+                    pack = str(parts[idx + 2]).strip().lower()
+                    if pack and not _is_generic_pack_folder_name(pack):
+                        inferred_pack = pack
         except Exception:
             inferred_top = ""
             inferred_pack = ""
