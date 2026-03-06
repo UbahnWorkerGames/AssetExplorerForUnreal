@@ -7164,9 +7164,9 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
         masked["import_base_url"] = "http://127.0.0.1:9090"
     if "ue_cmd_path" not in masked:
         masked["ue_cmd_path"] = ""
-    default_export_check = "/assets/exists?hash={hash}&hash_type=blake3&project_id={project_id}"
+    default_export_check = "/assets/exists?hash={hash}&hash_type=blake3&source_path={source_path}"
     current_export_check = str(masked.get("export_check_path_template") or "").strip()
-    if not current_export_check or current_export_check == "/assets/exists?hash={hash}&hash_type=blake3":
+    if not current_export_check or current_export_check in {"/assets/exists?hash={hash}&hash_type=blake3", "/assets/exists?hash={hash}&hash_type=blake3&project_id={project_id}"}:
         masked["export_check_path_template"] = default_export_check
     if "skip_export_if_on_server" in masked:
         raw = str(masked.get("skip_export_if_on_server") or "").strip().lower()
@@ -7257,13 +7257,90 @@ def get_last_upload() -> Dict[str, Any]:
 async def upload_asset(
     file: UploadFile = File(...),
     project_id: Optional[int] = Form(None),
+    source_path: Optional[str] = Form(None),
 ) -> Dict[str, Any]:
-    return await run_in_threadpool(_upload_asset_sync, file, project_id)
+    return await run_in_threadpool(_upload_asset_sync, file, project_id, source_path)
+
+
+_IMPORTABLE_CONTENT_EXTS = {".uasset", ".uexp", ".ubulk", ".uptnl", ".umap"}
+
+
+def _normalize_zip_member(member_name: str) -> Optional[str]:
+    name = str(member_name or "").replace("\\", "/").strip()
+    while name.startswith("/"):
+        name = name[1:]
+    if not name or name.endswith("/"):
+        return None
+    if ":" in name:
+        return None
+    parts = [p for p in name.split("/") if p not in {"", "."}]
+    if any(p == ".." for p in parts):
+        return None
+    if not parts:
+        return None
+    return "/".join(parts)
+
+
+def _content_rel_from_zip_member(member_name: str) -> Optional[str]:
+    clean = _normalize_zip_member(member_name)
+    if not clean:
+        return None
+    parts = clean.split("/")
+    lower_parts = [p.lower() for p in parts]
+    if "content" in lower_parts:
+        idx = lower_parts.index("content")
+        parts = parts[idx + 1 :]
+    if not parts:
+        return None
+    rel = "/".join(parts)
+    if Path(rel).suffix.lower() not in _IMPORTABLE_CONTENT_EXTS:
+        return None
+    return rel
+
+
+def _deploy_zip_content_to_project(zip_path: Path, project_row: Dict[str, Any], meta: Dict[str, Any]) -> int:
+    folder_path = str(project_row.get("folder_path") or "").strip()
+    if not folder_path:
+        return 0
+    project_content = Path(folder_path) / "Content"
+    project_content.mkdir(parents=True, exist_ok=True)
+    project_content_root = project_content.resolve()
+
+    allowed = set()
+    files_on_disk = meta.get("files_on_disk")
+    if isinstance(files_on_disk, list):
+        for item in files_on_disk:
+            rel = str(item or "").replace("\\", "/").strip().lstrip("/")
+            if not rel:
+                continue
+            if Path(rel).suffix.lower() not in _IMPORTABLE_CONTENT_EXTS:
+                continue
+            allowed.add(rel)
+
+    imported = 0
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for info in zf.infolist():
+            rel = _content_rel_from_zip_member(info.filename)
+            if not rel:
+                continue
+            if allowed and rel not in allowed:
+                continue
+            dest = (project_content_root / rel).resolve()
+            try:
+                dest.relative_to(project_content_root)
+            except ValueError as exc:
+                raise ValueError(f"Unsafe zip path: {info.filename}") from exc
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(info, "r") as src, dest.open("wb") as dst:
+                shutil.copyfileobj(src, dst)
+            imported += 1
+    return imported
 
 
 def _upload_asset_sync(
     file: UploadFile,
     project_id: Optional[int],
+    source_path: Optional[str],
 ) -> Dict[str, Any]:
     ensure_dirs()
     if not file.filename.lower().endswith(".zip"):
@@ -7279,7 +7356,7 @@ def _upload_asset_sync(
         with zipfile.ZipFile(zip_path, "r") as zf:
             with zf.open("meta.json") as meta_file:
                 meta = json.loads(meta_file.read().decode("utf-8"))
-        logger.info("Upload meta loaded: project_id=%s package=%s class=%s vendor=%s hash_full=%s", project_id, meta.get("package"), meta.get("class"), meta.get("vendor"), meta.get("hash_full_blake3"))
+        logger.info("Upload meta loaded: project_id=%s source_path=%s package=%s class=%s vendor=%s hash_full=%s", project_id, source_path, meta.get("package"), meta.get("class"), meta.get("vendor"), meta.get("hash_full_blake3"))
         _set_last_upload()
     except KeyError as exc:
         logger.warning("Upload rejected: meta.json missing in zip (file=%s)", file.filename)
@@ -7300,22 +7377,30 @@ def _upload_asset_sync(
 
     conn = get_db()
     try:
-        project_row = fetch_one(conn, "SELECT id FROM projects WHERE id = ?", (project_id,)) if project_id is not None else None
+        project_row = fetch_one(conn, "SELECT id, folder_path, source_path, source_folder FROM projects WHERE id = ?", (project_id,)) if project_id is not None else None
         if project_id is not None and not project_row:
             logger.warning("Upload project_id %s not found in DB", project_id)
         if not project_row:
+            if source_path:
+                by_source = _find_project_by_source(conn, source_path, None)
+                if by_source:
+                    project_id = int(by_source["id"])
+                    project_row = fetch_one(conn, "SELECT id, folder_path, source_path, source_folder FROM projects WHERE id = ?", (project_id,))
             resolved_id = _resolve_project_id_from_meta(conn, meta)
-            if resolved_id:
+            if not project_row and resolved_id:
                 project_id = resolved_id
-            else:
+                project_row = fetch_one(conn, "SELECT id, folder_path, source_path, source_folder FROM projects WHERE id = ?", (project_id,))
+            if not project_row:
                 vendor = str(meta.get("vendor") or "").strip()
                 if vendor:
                     existing_vendor = fetch_one(conn, "SELECT id FROM projects WHERE lower(source_folder) = lower(?)", (vendor,))
                     if existing_vendor:
                         project_id = existing_vendor["id"]
+                        project_row = fetch_one(conn, "SELECT id, folder_path, source_path, source_folder FROM projects WHERE id = ?", (project_id,))
                     else:
                         logger.warning("Upload resolve failed, auto-creating project for vendor=%s", vendor)
                         project_id = _create_project_from_root(vendor)
+                        project_row = fetch_one(conn, "SELECT id, folder_path, source_path, source_folder FROM projects WHERE id = ?", (project_id,))
                 else:
                     logger.warning("Upload rejected: project_id missing and could not be resolved (vendor/package=%s)", meta.get("package"))
                     raise HTTPException(status_code=400, detail="project_id missing and could not be resolved from meta")
@@ -7332,6 +7417,7 @@ def _upload_asset_sync(
         asset_dir = ASSETS_DIR / asset_prefix / hash_main
         asset_dir.mkdir(parents=True, exist_ok=True)
         try:
+            deployed_content_files = _deploy_zip_content_to_project(zip_path, project_row or {}, meta)
             meta, preview_files, thumb_image, detail_image, full_image, anim_thumb, anim_detail = process_asset_zip(
                 zip_path, asset_dir, hash_main, meta.get("class")
             )
@@ -7371,7 +7457,7 @@ def _upload_asset_sync(
         _db_retry(write_conn.commit)
         write_conn.close()
         logger.info("Upload duplicate: refreshed images project_id=%s hash_full=%s", project_id, hash_full)
-        return {"status": "updated_images", "id": existing["id"], "project_id": project_id}
+        return {"status": "updated_images", "id": existing["id"], "project_id": project_id, "deployed_content_files": deployed_content_files}
 
     asset_prefix = hash_main[:3]
     asset_dir = ASSETS_DIR / asset_prefix / hash_main
@@ -7380,6 +7466,7 @@ def _upload_asset_sync(
     asset_zip_rel = ""
     asset_zip_path = asset_dir / f"{hash_main}.zip"
     try:
+        deployed_content_files = _deploy_zip_content_to_project(zip_path, project_row or {}, meta)
         meta, preview_files, thumb_image, detail_image, full_image, anim_thumb, anim_detail = process_asset_zip(
             zip_path, asset_dir, hash_main, meta.get("class")
         )
@@ -7465,7 +7552,7 @@ def _upload_asset_sync(
     _db_retry(write_conn.commit)
     write_conn.close()
 
-    return {"id": asset_id, "name": name, "project_id": project_id}
+    return {"id": asset_id, "name": name, "project_id": project_id, "deployed_content_files": deployed_content_files}
 
 
 def _parse_tags(value: str) -> List[str]:
@@ -7956,7 +8043,7 @@ def _run_tags_import_task(task_id: int) -> None:
 
 
 @app.get("/assets/exists")
-def asset_exists(hash: str, hash_type: str = "blake3", project_id: Optional[int] = None) -> Dict[str, Any]:
+def asset_exists(hash: str, hash_type: str = "blake3", project_id: Optional[int] = None, source_path: Optional[str] = None) -> Dict[str, Any]:
     if not hash:
         raise HTTPException(status_code=400, detail="hash is required")
     column = _resolve_hash_column(hash_type)
@@ -7973,16 +8060,22 @@ def asset_exists(hash: str, hash_type: str = "blake3", project_id: Optional[int]
             False,
         )
         return {"exists": False, "id": None}
-    if project_id is None:
+    pid = int(project_id) if project_id is not None else 0
+    if pid <= 0 and source_path:
+        row = _find_project_by_source(conn, source_path, None)
+        if row:
+            pid = int(row.get("id") or 0)
+    if pid <= 0:
         conn.close()
         logger.info(
-            "assets/exists hash=%s hash_type=%s exists=%s (project scoped check requires project_id)",
+            "assets/exists hash=%s hash_type=%s exists=%s (project scope unresolved: project_id=%s source_path=%s)",
             hash,
             hash_type,
             False,
+            project_id,
+            source_path,
         )
         return {"exists": False, "id": None, "count": 0, "project_id": None, "sample_project_ids": []}
-    pid = int(project_id)
     row = fetch_one(
         conn,
         f"SELECT id, project_id FROM assets WHERE {column} = ? AND project_id = ? ORDER BY id DESC LIMIT 1",
