@@ -7258,7 +7258,7 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
     if "server_mode_enabled" not in masked:
         masked["server_mode_enabled"] = "false"
     if "export_resolve_deep_roots" not in masked:
-        masked["export_resolve_deep_roots"] = ""
+        masked["export_resolve_deep_roots"] = "Dekogon_Industrial,SUBURBS,DECALS,BUILDINGS"
     default_export_check = "/assets/exists?hash={hash}&hash_type=blake3&source_path={source_path}"
     current_export_check = str(masked.get("export_check_path_template") or "").strip()
     if not current_export_check or current_export_check in {"/assets/exists?hash={hash}&hash_type=blake3", "/assets/exists?hash={hash}&hash_type=blake3&project_id={project_id}"}:

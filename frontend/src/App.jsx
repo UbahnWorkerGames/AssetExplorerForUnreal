@@ -664,7 +664,7 @@ export default function App() {
     export_anim_sequence_image_count: 4,
     export_capture360_discard_frames: 2,
     export_upload_after_export: true,
-    export_resolve_deep_roots: "",
+    export_resolve_deep_roots: "Dekogon_Industrial,SUBURBS,DECALS,BUILDINGS",
     export_upload_path_template: "/assets/upload",
     export_check_path_template: "/assets/exists?hash={hash}&hash_type=blake3&source_path={source_path}",
     ue_cmd_path: "",
