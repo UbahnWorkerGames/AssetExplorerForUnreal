@@ -69,6 +69,7 @@ set ASSET_SERVER_PORT=8008
 set ASSET_SERVER_LOG_LEVEL=info
 set ASSET_SERVER_RELOAD=1
 set ASSET_SERVER_CWD=%BACKEND_DIR%
+start "" cmd /c "timeout /t 2 /nobreak >nul && start \"\" \"http://localhost:8008\""
 call "%PYTHON%" -m uvicorn main:app --reload --host 127.0.0.1 --port 8008 --log-level info
 
 echo Backend exited.

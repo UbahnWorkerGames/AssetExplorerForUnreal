@@ -96,6 +96,7 @@ STARTUP_IMPORT_STATUS: Dict[str, Any] = {
     "finished_at": None,
 }
 PROJECT_DIR_SOURCE_MIN_BYTES = 50 * 1024 * 1024
+DEFAULT_DEEP_RESOLVE_ROOTS_CSV = "Dekogon_Industrial,SUBURBS,DECALS,BUILDINGS"
 
 _event_queues: List["queue.Queue[str]"] = []
 _event_lock = threading.Lock()
@@ -1956,6 +1957,10 @@ class ProjectReimport(BaseModel):
 
 class ProjectExportCmd(BaseModel):
     game_path: Optional[str] = None
+
+
+class MissingContentFilesPayload(BaseModel):
+    files: List[str] = []
 
 
 class SettingsUpdate(BaseModel):
@@ -4564,20 +4569,22 @@ def _copy_project_content(project_id: int, source_path: str, dest_root: Path) ->
 
 
 def _resolve_source_paths(source_path: Optional[str], source_folder: Optional[str]) -> Dict[str, Optional[Path]]:
-    resolved_source = Path(source_path).expanduser() if source_path else None
+    resolved_source = _resolve_fs_path(source_path) if source_path else None
     if source_path is None and source_folder:
-        sf_path = Path(source_folder).expanduser()
+        sf_path = _resolve_fs_path(source_folder) or Path(source_folder).expanduser()
         parts = [p for p in sf_path.parts]
         if 'Content' in parts:
             idx = parts.index('Content')
             if idx > 0 and idx + 1 < len(parts):
                 source_path = str(Path(*parts[:idx]))
                 source_folder = Path(*parts[idx+1:]).name
-                resolved_source = Path(source_path).expanduser()
+                resolved_source = _resolve_fs_path(source_path) or Path(source_path).expanduser()
 
     if source_folder and ('\\' in source_folder or '/' in source_folder):
         source_folder = Path(source_folder).name
-    resolved_folder = Path(source_folder).expanduser() if source_folder else None
+    resolved_folder = _resolve_fs_path(source_folder) if source_folder else None
+    if resolved_folder is None and source_folder:
+        resolved_folder = Path(source_folder).expanduser()
 
     if resolved_source and resolved_source.exists():
         if (resolved_source / "Content").is_dir():
@@ -4887,9 +4894,9 @@ def _resolve_source_content_path(row: Dict[str, Any]) -> Optional[Path]:
     if not source_path:
         return None
     source_folder = (row.get("source_folder") or "").strip()
-    base = Path(source_path)
+    base = _resolve_fs_path(source_path) or Path(source_path)
     if source_folder:
-        folder_path = Path(source_folder)
+        folder_path = _resolve_fs_path(source_folder) or Path(source_folder)
         if folder_path.is_absolute():
             return folder_path
         return base / "Content" / source_folder
@@ -4904,7 +4911,7 @@ def _resolve_source_content_base_path(row: Dict[str, Any]) -> Optional[Path]:
     source_path = (row.get("source_path") or "").strip()
     if not source_path:
         return None
-    base = Path(source_path)
+    base = _resolve_fs_path(source_path) or Path(source_path)
     if base.name.lower() == "content":
         return base
     return base / "Content"
@@ -5118,11 +5125,52 @@ def _build_embedding_text(
 def _normalize_path_value(value: Optional[str]) -> str:
     if not value:
         return ""
+    raw = str(value).strip()
+    if not raw:
+        return ""
+    normalized_raw = raw.replace("\\", "/")
+    raw_parts = [p for p in normalized_raw.strip("/").split("/") if p]
+    if raw_parts and raw_parts[0].lower() == "game":
+        return "/" + "/".join(raw_parts).lower()
     try:
-        resolved = Path(value).expanduser().resolve()
+        path_obj = Path(raw).expanduser()
+        if not path_obj.is_absolute():
+            path_obj = (DATA_DIR / path_obj).resolve()
+        else:
+            path_obj = path_obj.resolve()
+        resolved = path_obj
         return str(resolved).replace("\\", "/").lower()
     except Exception:
-        return str(value).replace("\\", "/").lower()
+        return normalized_raw.lower()
+
+
+def _resolve_fs_path(path_value: Optional[str]) -> Optional[Path]:
+    raw = str(path_value or "").strip()
+    if not raw:
+        return None
+    normalized = raw.replace("\\", "/")
+    parts = [p for p in normalized.strip("/").split("/") if p]
+    if parts and parts[0].lower() == "game":
+        return None
+    try:
+        candidate = Path(raw).expanduser()
+        if not candidate.is_absolute():
+            candidate = (DATA_DIR / candidate).resolve()
+        else:
+            candidate = candidate.resolve()
+        return candidate
+    except Exception:
+        return None
+
+
+def _to_data_relative_path(path_value: Optional[str]) -> Optional[str]:
+    abs_path = _resolve_fs_path(path_value)
+    if not abs_path:
+        return str(path_value or "").strip() or None
+    try:
+        return abs_path.relative_to(DATA_DIR.resolve()).as_posix()
+    except Exception:
+        return str(abs_path).replace("\\", "/")
 
 
 def _get_cached_source_size(
@@ -5197,22 +5245,38 @@ def _find_project_by_source(
 ) -> Optional[Dict[str, Any]]:
     inferred_top = ""
     inferred_pack = ""
+    is_game_virtual_path = False
+    deep_source_candidate: Optional[Path] = None
     if source_path:
         try:
-            s = Path(source_path).expanduser()
-            parts = list(s.parts)
-            lower_parts = [p.lower() for p in parts]
-            if "content" in lower_parts:
-                idx = lower_parts.index("content")
-                if idx + 1 < len(parts):
-                    inferred_top = str(parts[idx + 1]).strip().lower()
-                if idx + 2 < len(parts):
-                    pack = str(parts[idx + 2]).strip().lower()
+            raw_source = str(source_path).replace("\\", "/").strip()
+            game_parts = [p for p in raw_source.strip("/").split("/") if p]
+            if game_parts and game_parts[0].lower() == "game":
+                is_game_virtual_path = True
+                if len(game_parts) >= 2:
+                    inferred_top = str(game_parts[1]).strip().lower()
+                if len(game_parts) >= 3:
+                    pack = str(game_parts[2]).strip().lower()
                     if pack and not _is_generic_pack_folder_name(pack):
                         inferred_pack = pack
+            else:
+                s = _resolve_fs_path(source_path) or Path(source_path).expanduser()
+                parts = list(s.parts)
+                lower_parts = [p.lower() for p in parts]
+                if "content" in lower_parts:
+                    idx = lower_parts.index("content")
+                    if idx + 1 < len(parts):
+                        inferred_top = str(parts[idx + 1]).strip().lower()
+                    if idx + 2 < len(parts):
+                        pack = str(parts[idx + 2]).strip().lower()
+                        if pack and not _is_generic_pack_folder_name(pack):
+                            inferred_pack = pack
+                    if idx + 2 < len(parts):
+                        deep_source_candidate = Path(*parts[: idx + 3])
         except Exception:
             inferred_top = ""
             inferred_pack = ""
+            deep_source_candidate = None
     if source_folder:
         cleaned = re.split(r"[\/]+", source_folder.strip().strip("/\\"))
         source_folder = cleaned[-1] if cleaned else source_folder
@@ -5220,13 +5284,20 @@ def _find_project_by_source(
     include_project_root = False
     resolved_source = None
     try:
-        resolved_source = Path(source_path).expanduser() if source_path else None
+        resolved_source = _resolve_fs_path(source_path) if source_path else None
     except Exception:
         resolved_source = None
     if resolved_source:
         if (resolved_source / "Content").is_dir() or resolved_source.name.lower() == "content":
             include_project_root = True
-    candidates = [source_path, source_folder, resolved.get("source_folder")]
+    use_deep = bool(inferred_top and inferred_pack and deep_root_names and inferred_top in deep_root_names)
+    candidates = [source_path]
+    if use_deep and deep_source_candidate is not None:
+        candidates.append(deep_source_candidate)
+    else:
+        candidates.append(resolved.get("source_folder"))
+    if source_folder and not is_game_virtual_path:
+        candidates.append(source_folder)
     if include_project_root:
         candidates.append(resolved.get("project_root"))
     normalized = {val for val in (_normalize_path_value(c) for c in candidates) if val}
@@ -5241,16 +5312,16 @@ def _find_project_by_source(
         row_source_folder_name = Path(row_source_folder).name.strip().lower() if row_source_folder else ""
         row_values = [
             _normalize_path_value(row.get("source_path")),
-            _normalize_path_value(row.get("source_folder")),
             _normalize_path_value(folder_path),
             _normalize_path_value(str(Path(folder_path) / "Content")) if folder_path else "",
             _normalize_path_value(str(Path(folder_path) / "Content" / row_source_folder_name)) if folder_path and row_source_folder_name else "",
         ]
+        if not is_game_virtual_path:
+            row_values.append(_normalize_path_value(row.get("source_folder")))
         if any(val and val in normalized for val in row_values):
             return row
 
     # 2) If configured: for listed top roots, prefer /Content/<Top>/<Pack>/... -> <Pack>.
-    use_deep = bool(inferred_top and inferred_pack and deep_root_names and inferred_top in deep_root_names)
     if use_deep:
         pack_matches = []
         for row in rows:
@@ -5262,7 +5333,8 @@ def _find_project_by_source(
             return pack_matches[0]
 
     # 3) Fallback to /Content/<Top>/... only if unique to avoid wrong routing.
-    if inferred_top:
+    # If deep-root mode is active and a pack was inferred, do NOT fallback to top-level.
+    if inferred_top and not (use_deep and inferred_pack):
         top_matches = []
         for row in rows:
             row_source_folder = str(row.get("source_folder") or "").strip()
@@ -5704,6 +5776,7 @@ def startup() -> None:
     ensure_dirs()
     init_db()
     conn = get_db()
+    _migrate_internal_source_paths_to_relative(conn)
     settings = get_settings(conn)
     # Clear any queued/running tasks from previous session.
     try:
@@ -6065,7 +6138,9 @@ def resolve_project(source_path: str, auto_create: bool = True) -> Dict[str, Any
         raise HTTPException(status_code=400, detail="source_path is required")
     target = _normalize_path_value(source_path)
     conn = get_db()
-    existing = _find_project_by_source(conn, source_path, None)
+    settings = get_settings(conn)
+    deep_root_names = _deep_roots_from_settings(settings)
+    existing = _find_project_by_source(conn, source_path, None, deep_root_names=deep_root_names)
     if existing:
         conn.close()
         return {"project_id": existing["id"]}
@@ -6083,16 +6158,24 @@ def resolve_project(source_path: str, auto_create: bool = True) -> Dict[str, Any
         resolved = _resolve_source_paths(source_path, None)
         project_root = resolved.get("project_root")
         source_folder_path = resolved.get("source_folder")
+        game_path_info = _parse_game_virtual_path(source_path, deep_root_names=deep_root_names)
+        inferred_source_folder = _infer_source_folder_from_path(source_path, deep_root_names=deep_root_names)
 
-        candidate_path = Path(source_path).expanduser()
+        candidate_path = _resolve_fs_path(source_path) or Path(source_path).expanduser()
         if candidate_path.is_file():
             candidate_path = candidate_path.parent
         parts = list(candidate_path.parts)
         lower_parts = [p.lower() for p in parts]
         project_name = ""
+        if game_path_info.get("project_name"):
+            project_name = str(game_path_info.get("project_name") or "").strip()
+        elif inferred_source_folder:
+            project_name = Path(inferred_source_folder).name
         if "content" in lower_parts:
             idx = lower_parts.index("content")
-            if idx + 1 < len(parts):
+            if idx + 2 < len(parts) and inferred_source_folder and "/" in inferred_source_folder:
+                project_name = parts[idx + 2]
+            elif idx + 1 < len(parts):
                 project_name = parts[idx + 1]
         if not project_name:
             if candidate_path.name.lower() == "content":
@@ -6102,10 +6185,21 @@ def resolve_project(source_path: str, auto_create: bool = True) -> Dict[str, Any
             else:
                 project_name = candidate_path.name or "project"
 
-        source_folder_name = Path(source_folder_path).name if source_folder_path else ""
+        source_folder_name = ""
+        if game_path_info.get("source_folder"):
+            source_folder_name = str(game_path_info.get("source_folder") or "").strip()
+        elif inferred_source_folder:
+            source_folder_name = str(inferred_source_folder).strip()
+        elif source_folder_path:
+            source_folder_name = Path(source_folder_path).name
         conn = get_db()
         if source_folder_name:
-            existing = fetch_one(conn, "SELECT id FROM projects WHERE lower(source_folder) = lower(?)", (source_folder_name,))
+            source_folder_leaf = Path(source_folder_name).name if source_folder_name else ""
+            existing = fetch_one(
+                conn,
+                "SELECT id FROM projects WHERE lower(source_folder) = lower(?) OR lower(source_folder) = lower(?)",
+                (source_folder_name, source_folder_leaf or source_folder_name),
+            )
             if existing:
                 conn.close()
                 return {"project_id": existing["id"]}
@@ -6530,10 +6624,12 @@ def open_project_folder(project_id: int, target: str = Query("auto")) -> Dict[st
         else:
             source_path = project.get("source_path")
             source_folder = project.get("source_folder")
-            if source_path and Path(source_path).exists():
-                candidate = Path(source_path)
-            elif source_folder and Path(source_folder).exists():
-                candidate = Path(source_folder)
+            source_path_resolved = _resolve_fs_path(source_path)
+            source_folder_resolved = _resolve_fs_path(source_folder)
+            if source_path_resolved and source_path_resolved.exists():
+                candidate = source_path_resolved
+            elif source_folder_resolved and source_folder_resolved.exists():
+                candidate = source_folder_resolved
         if not candidate or not candidate.exists():
             raise HTTPException(status_code=404, detail="Source folder not found")
         # open folder that contains a Content directory if possible
@@ -6620,10 +6716,11 @@ def reimport_project(project_id: int, payload: ProjectReimport) -> Dict[str, Any
         conn.close()
         raise HTTPException(status_code=400, detail="Source path is missing")
     canonical_folder_path = _normalize_legacy_project_folder_path(project.get("folder_path"))
+    internal_source_path = _to_data_relative_path(canonical_folder_path) or canonical_folder_path
 
     conn.execute(
         "UPDATE projects SET source_path = ?, source_folder = ?, full_project_copy = ?, reimported_once = 1, source_preference = 'internal', folder_path = ? WHERE id = ?",
-        (source_path, source_folder, 1 if full_copy else 0, canonical_folder_path, project_id),
+        (internal_source_path, source_folder, 1 if full_copy else 0, canonical_folder_path, project_id),
     )
     _db_retry(conn.commit)
     conn.close()
@@ -7256,9 +7353,9 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
     if "ue_cmd_path" not in masked:
         masked["ue_cmd_path"] = ""
     if "server_mode_enabled" not in masked:
-        masked["server_mode_enabled"] = "false"
-    if "export_resolve_deep_roots" not in masked:
-        masked["export_resolve_deep_roots"] = "Dekogon_Industrial,SUBURBS,DECALS,BUILDINGS"
+        masked["server_mode_enabled"] = "true"
+    if "export_resolve_deep_roots" not in masked or not str(masked.get("export_resolve_deep_roots") or "").strip():
+        masked["export_resolve_deep_roots"] = DEFAULT_DEEP_RESOLVE_ROOTS_CSV
     default_export_check = "/assets/exists?hash={hash}&hash_type=blake3&source_path={source_path}"
     current_export_check = str(masked.get("export_check_path_template") or "").strip()
     if not current_export_check or current_export_check in {"/assets/exists?hash={hash}&hash_type=blake3", "/assets/exists?hash={hash}&hash_type=blake3&project_id={project_id}"}:
@@ -7396,6 +7493,88 @@ def _content_rel_from_zip_member(member_name: str) -> Optional[str]:
     return rel
 
 
+def _missing_content_files_for_project(project_row: Dict[str, Any], files: List[str]) -> Dict[str, Any]:
+    folder_path = str(project_row.get("folder_path") or "").strip()
+    if not folder_path:
+        return {"missing_files": [], "missing_count": 0, "existing_count": 0, "ignored_count": len(files)}
+    project_content_root = (Path(folder_path) / "Content").resolve()
+    missing: List[str] = []
+    existing_count = 0
+    ignored_count = 0
+    seen: set[str] = set()
+    for item in files:
+        rel = _content_rel_from_zip_member(str(item or ""))
+        if not rel:
+            ignored_count += 1
+            continue
+        if rel in seen:
+            continue
+        seen.add(rel)
+        dest = (project_content_root / rel).resolve()
+        try:
+            dest.relative_to(project_content_root)
+        except ValueError:
+            ignored_count += 1
+            continue
+        if dest.exists():
+            existing_count += 1
+        else:
+            missing.append(rel)
+    return {
+        "missing_files": missing,
+        "missing_count": len(missing),
+        "existing_count": existing_count,
+        "ignored_count": ignored_count,
+    }
+
+
+def _parse_game_virtual_path(source_path: Optional[str], deep_root_names: Optional[set[str]] = None) -> Dict[str, str]:
+    raw = str(source_path or "").replace("\\", "/").strip()
+    parts = [p for p in raw.strip("/").split("/") if p]
+    if not parts or parts[0].lower() != "game":
+        return {}
+    top = parts[1].strip() if len(parts) > 1 else ""
+    pack = parts[2].strip() if len(parts) > 2 else ""
+    if pack and _is_generic_pack_folder_name(pack):
+        pack = ""
+    top_lc = top.lower()
+    use_deep = bool(top and pack and deep_root_names and top_lc in deep_root_names)
+    source_folder = f"{top}/{pack}" if use_deep and pack else top
+    project_name = pack if use_deep and pack else (top or (parts[-1] if parts else "project"))
+    return {
+        "top": top,
+        "pack": pack,
+        "source_folder": source_folder,
+        "project_name": project_name,
+    }
+
+
+def _infer_source_folder_from_path(source_path: Optional[str], deep_root_names: Optional[set[str]] = None) -> Optional[str]:
+    deep_root_names = deep_root_names or set()
+    raw = str(source_path or "").replace("\\", "/").strip()
+    if not raw:
+        return None
+    parts = [p for p in raw.strip("/").split("/") if p]
+    if parts and parts[0].lower() == "game":
+        info = _parse_game_virtual_path(raw, deep_root_names=deep_root_names)
+        return str(info.get("source_folder") or "").strip() or None
+    lower_parts = [p.lower() for p in parts]
+    if "content" not in lower_parts:
+        return None
+    idx = lower_parts.index("content")
+    if idx + 1 >= len(parts):
+        return None
+    top = str(parts[idx + 1]).strip()
+    if not top:
+        return None
+    top_lc = top.lower()
+    if top_lc in deep_root_names and idx + 2 < len(parts):
+        pack = str(parts[idx + 2]).strip()
+        if pack and not _is_generic_pack_folder_name(pack):
+            return f"{top}/{pack}"
+    return top
+
+
 def _deploy_zip_content_to_project(zip_path: Path, project_row: Dict[str, Any], meta: Dict[str, Any]) -> int:
     folder_path = str(project_row.get("folder_path") or "").strip()
     if not folder_path:
@@ -7416,23 +7595,53 @@ def _deploy_zip_content_to_project(zip_path: Path, project_row: Dict[str, Any], 
             allowed.add(rel)
 
     imported = 0
+    skipped_existing = 0
+    skipped_filter = 0
+    scanned_importable = 0
     with zipfile.ZipFile(zip_path, "r") as zf:
         for info in zf.infolist():
             rel = _content_rel_from_zip_member(info.filename)
             if not rel:
                 continue
+            scanned_importable += 1
             if allowed and rel not in allowed:
+                skipped_filter += 1
                 continue
             dest = (project_content_root / rel).resolve()
             try:
                 dest.relative_to(project_content_root)
             except ValueError as exc:
                 raise ValueError(f"Unsafe zip path: {info.filename}") from exc
+            if dest.exists():
+                skipped_existing += 1
+                continue
             dest.parent.mkdir(parents=True, exist_ok=True)
             with zf.open(info, "r") as src, dest.open("wb") as dst:
                 shutil.copyfileobj(src, dst)
             imported += 1
+    logger.info(
+        "Zip content deploy project_id=%s scanned_importable=%s imported=%s skipped_existing=%s skipped_filter=%s allowed_filter=%s",
+        project_row.get("id"),
+        scanned_importable,
+        imported,
+        skipped_existing,
+        skipped_filter,
+        len(allowed),
+    )
     return imported
+
+
+@app.post("/projects/{project_id}/content/missing")
+def project_missing_content_files(project_id: int, payload: MissingContentFilesPayload) -> Dict[str, Any]:
+    conn = get_db()
+    project = fetch_one(conn, "SELECT id, folder_path FROM projects WHERE id = ?", (project_id,))
+    conn.close()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    files = payload.files or []
+    result = _missing_content_files_for_project(project, files)
+    result["project_id"] = int(project_id)
+    return result
 
 
 def _upload_asset_sync(
@@ -7476,7 +7685,7 @@ def _upload_asset_sync(
     conn = get_db()
     try:
         settings = get_settings(conn)
-        deep_root_names = {v.strip().lower() for v in _parse_csv_list(settings.get("export_resolve_deep_roots")) if v.strip()}
+        deep_root_names = _deep_roots_from_settings(settings)
         raw_server_mode = str(settings.get("server_mode_enabled") or "").strip().lower()
         server_mode_enabled = raw_server_mode in {"1", "true", "yes", "on"}
         project_row = fetch_one(conn, "SELECT id, folder_path, source_path, source_folder FROM projects WHERE id = ?", (project_id,)) if project_id is not None else None
@@ -7484,10 +7693,30 @@ def _upload_asset_sync(
             logger.warning("Upload project_id %s not found in DB", project_id)
         if not project_row:
             if source_path:
+                inferred_source_folder = _infer_source_folder_from_path(source_path, deep_root_names=deep_root_names)
+                if inferred_source_folder:
+                    inferred_leaf = Path(inferred_source_folder).name
+                    by_folder = fetch_one(
+                        conn,
+                        "SELECT id, folder_path, source_path, source_folder FROM projects WHERE lower(source_folder) = lower(?) OR lower(source_folder) = lower(?)",
+                        (inferred_source_folder, inferred_leaf),
+                    )
+                    if by_folder:
+                        project_id = int(by_folder["id"])
+                        project_row = by_folder
                 by_source = _find_project_by_source(conn, source_path, None, deep_root_names=deep_root_names)
-                if by_source:
+                if not project_row and by_source:
                     project_id = int(by_source["id"])
                     project_row = fetch_one(conn, "SELECT id, folder_path, source_path, source_folder FROM projects WHERE id = ?", (project_id,))
+                if not project_row:
+                    try:
+                        resolved = resolve_project(source_path, auto_create=True)
+                        resolved_project_id = int((resolved or {}).get("project_id") or 0)
+                        if resolved_project_id > 0:
+                            project_id = resolved_project_id
+                            project_row = fetch_one(conn, "SELECT id, folder_path, source_path, source_folder FROM projects WHERE id = ?", (project_id,))
+                    except Exception as exc:
+                        logger.warning("Upload source-path resolve/auto-create failed for source_path=%s err=%s", source_path, exc)
             resolved_id = _resolve_project_id_from_meta(conn, meta)
             if not project_row and resolved_id:
                 project_id = resolved_id
@@ -7506,6 +7735,13 @@ def _upload_asset_sync(
                 else:
                     logger.warning("Upload rejected: project_id missing and could not be resolved (vendor/package=%s)", meta.get("package"))
                     raise HTTPException(status_code=400, detail="project_id missing and could not be resolved from meta")
+        logger.info(
+            "Upload project resolved: project_id=%s source_folder=%s folder_path=%s source_path=%s",
+            project_id,
+            project_row.get("source_folder") if project_row else None,
+            project_row.get("folder_path") if project_row else None,
+            project_row.get("source_path") if project_row else None,
+        )
 
         existing = fetch_one(
             conn,
@@ -7558,7 +7794,7 @@ def _upload_asset_sync(
         )
         _db_retry(write_conn.commit)
         if server_mode_enabled and project_id and int(deployed_content_files or 0) > 0:
-            cur.execute("UPDATE projects SET source_preference = 'internal' WHERE id = ?", (int(project_id),))
+            _set_project_internal_source(write_conn, int(project_id))
             _db_retry(write_conn.commit)
         write_conn.close()
         logger.info("Upload duplicate: refreshed images project_id=%s hash_full=%s", project_id, hash_full)
@@ -7656,7 +7892,7 @@ def _upload_asset_sync(
     ))
     _db_retry(write_conn.commit)
     if server_mode_enabled and project_id and int(deployed_content_files or 0) > 0:
-        cur.execute("UPDATE projects SET source_preference = 'internal' WHERE id = ?", (int(project_id),))
+        _set_project_internal_source(write_conn, int(project_id))
         _db_retry(write_conn.commit)
     write_conn.close()
 
@@ -7670,7 +7906,52 @@ def _parse_tags(value: str) -> List[str]:
 def _parse_csv_list(value: Optional[str]) -> List[str]:
     if not value:
         return []
-    return [t.strip() for t in str(value).split(",") if t.strip()]
+    raw = str(value).replace(";", ",").replace("\n", ",").replace("\r", ",")
+    return [t.strip() for t in raw.split(",") if t.strip()]
+
+
+def _deep_roots_from_settings(settings: Dict[str, Any]) -> set[str]:
+    raw = settings.get("export_resolve_deep_roots")
+    if not str(raw or "").strip():
+        raw = DEFAULT_DEEP_RESOLVE_ROOTS_CSV
+    return {v.strip().lower() for v in _parse_csv_list(str(raw)) if v.strip()}
+
+
+def _set_project_internal_source(conn: sqlite3.Connection, project_id: int) -> None:
+    row = fetch_one(conn, "SELECT id, folder_path, source_folder FROM projects WHERE id = ?", (int(project_id),))
+    if not row:
+        return
+    folder_path = str(row.get("folder_path") or "").strip()
+    source_folder = str(row.get("source_folder") or "").strip() or None
+    internal_source_path = _to_data_relative_path(folder_path) if folder_path else None
+    conn.execute(
+        "UPDATE projects SET source_preference = 'internal', source_path = ?, source_folder = ? WHERE id = ?",
+        (internal_source_path, source_folder, int(project_id)),
+    )
+
+
+def _migrate_internal_source_paths_to_relative(conn: sqlite3.Connection) -> None:
+    rows = fetch_all(conn, "SELECT id, source_preference, source_path, folder_path FROM projects")
+    changed = 0
+    for row in rows:
+        if _normalize_source_preference(row.get("source_preference"), "external") != "internal":
+            continue
+        project_id = int(row.get("id") or 0)
+        if project_id <= 0:
+            continue
+        folder_path = str(row.get("folder_path") or "").strip()
+        if not folder_path:
+            continue
+        rel_path = _to_data_relative_path(folder_path)
+        if not rel_path:
+            continue
+        current_source = str(row.get("source_path") or "").strip()
+        if current_source == rel_path:
+            continue
+        conn.execute("UPDATE projects SET source_path = ? WHERE id = ?", (rel_path, project_id))
+        changed += 1
+    if changed:
+        _db_retry(conn.commit)
 
 
 def _count_tags_json(raw_tags: Any) -> int:
@@ -8157,7 +8438,7 @@ def asset_exists(hash: str, hash_type: str = "blake3", project_id: Optional[int]
     column = _resolve_hash_column(hash_type)
     conn = get_db()
     settings = get_settings(conn)
-    deep_root_names = {v.strip().lower() for v in _parse_csv_list(settings.get("export_resolve_deep_roots")) if v.strip()}
+    deep_root_names = _deep_roots_from_settings(settings)
     raw_skip = str(settings.get("skip_export_if_on_server") or "").strip().lower()
     skip_enabled = raw_skip in {"1", "true", "yes", "on"}
     if not skip_enabled:

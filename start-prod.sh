@@ -15,8 +15,24 @@ require_cmd() {
   fi
 }
 
+open_browser() {
+  local url="$1"
+  if command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$url" >/dev/null 2>&1 || true
+    return
+  fi
+  if command -v open >/dev/null 2>&1; then
+    open "$url" >/dev/null 2>&1 || true
+  fi
+}
+
 echo "[1/4] Checking prerequisites..."
 require_cmd python3
+if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; then
+  echo "Python 3.10+ is required." >&2
+  python3 -c 'import sys; print("Detected:", sys.version.replace("\n"," "))'
+  exit 1
+fi
 
 if [[ ! -x "$VENV_PYTHON" ]]; then
   echo "[2/4] Creating backend virtualenv..."
@@ -46,7 +62,7 @@ fi
 
 echo "[4/4] Starting backend with bundled UI..."
 export ASSET_UI=true
-export ASSET_UI_DIST="$DIST_DIR"
+export ASSET_UI_DIST="../frontend/dist"
 export ASSET_SERVER_HOST=0.0.0.0
 export ASSET_SERVER_PORT=8008
 export ASSET_SERVER_LOG_LEVEL=info
@@ -54,4 +70,13 @@ export ASSET_SERVER_RELOAD=0
 export ASSET_SERVER_CWD="$BACKEND_DIR"
 
 cd "$BACKEND_DIR"
+(
+  for _ in $(seq 1 120); do
+    if "$VENV_PYTHON" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8008/health', timeout=1)"; then
+      open_browser "http://localhost:8008"
+      break
+    fi
+    sleep 0.5
+  done
+) >/dev/null 2>&1 &
 exec "$VENV_PYTHON" -m uvicorn main:app --host 0.0.0.0 --port 8008 --log-level info

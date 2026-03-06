@@ -14,6 +14,13 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+python -c "import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)" >nul 2>nul
+if errorlevel 1 (
+  echo [error] Python 3.10+ is required.
+  python -c "import sys; print('Detected:', sys.version.replace('\n',' '))"
+  pause
+  exit /b 1
+)
 
 if not exist "%PYTHON%" (
   echo [1/4] Creating backend venv...
@@ -43,16 +50,17 @@ if errorlevel 1 (
   exit /b 1
 )
 
-if not exist "%DIST_DIR%\index.html" (
-  echo [error] Frontend build missing: %DIST_DIR%\index.html
+cd /d "%ROOT_DIR%"
+if not exist "frontend\dist\index.html" (
+  echo [error] Frontend build missing: frontend\dist\index.html
   echo         Build frontend once before runtime deployment.
   pause
   exit /b 1
 )
-findstr /C:"/ui/assets/" "%DIST_DIR%\index.html" >nul
+findstr /C:"/ui/assets/" "frontend\dist\index.html" >nul
 if errorlevel 1 (
   echo [error] Frontend dist seems built with wrong base path.
-  echo         Expected "/ui/assets/" in %DIST_DIR%\index.html
+  echo         Expected "/ui/assets/" in frontend\dist\index.html
   echo         Run build-ui.bat to rebuild with VITE_BASE=/ui/
   pause
   exit /b 1
@@ -60,7 +68,7 @@ if errorlevel 1 (
 
 echo [3/4] Starting backend with bundled UI...
 set ASSET_UI=true
-set ASSET_UI_DIST=%DIST_DIR%
+set ASSET_UI_DIST=..\frontend\dist
 set ASSET_SERVER_HOST=0.0.0.0
 set ASSET_SERVER_PORT=8008
 set ASSET_SERVER_LOG_LEVEL=info
@@ -81,6 +89,8 @@ if defined PORT_PID (
 )
 
 echo [4/4] Backend running on http://0.0.0.0:8008
+start "" powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; for($i=0;$i -lt 120;$i++){ try { $r=Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8008/health' -TimeoutSec 2; if($r.StatusCode -ge 200 -and $r.StatusCode -lt 500){ Start-Process 'http://localhost:8008'; break } } catch {}; Start-Sleep -Milliseconds 500 }"
+cd /d "%BACKEND_DIR%"
 call "%PYTHON%" -m uvicorn main:app --host 0.0.0.0 --port 8008 --log-level info
 
 endlocal

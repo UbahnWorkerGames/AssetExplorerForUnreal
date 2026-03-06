@@ -652,7 +652,7 @@ export default function App() {
     groq_model: "",
     ollama_model: "",
     import_base_url: "http://127.0.0.1:9090",
-    server_mode_enabled: false,
+    server_mode_enabled: true,
     skip_export_if_on_server: true,
     export_overwrite_zips: false,
     export_default_image_count: 1,
@@ -2923,6 +2923,16 @@ function formatSizeGb(bytes) {
     const filtered = Array.from(files).filter((file) => file.name.toLowerCase().endsWith(".zip"));
     setUploadFiles(filtered);
   }
+  const hasOpenTaskWork = useMemo(() => {
+    const queued = Number(queueStatus?.tasks?.queued || 0);
+    const running = Number(queueStatus?.tasks?.running || 0);
+    const pending = Number(queueStatus?.openai_batches?.pending || 0);
+    const inProgress = Number(queueStatus?.openai_batches?.in_progress || 0);
+    const finalizing = Number(queueStatus?.openai_batches?.finalizing || 0);
+    const activeTaskId = Number(queueStatus?.worker_active_task_id || 0);
+    return queued > 0 || running > 0 || pending > 0 || inProgress > 0 || finalizing > 0 || activeTaskId > 0;
+  }, [queueStatus]);
+
   useEffect(() => {
     if (view !== "tasks") return;
     let active = true;
@@ -2943,12 +2953,17 @@ function formatSizeGb(bytes) {
         });
     };
     load();
+    if (!hasOpenTaskWork) {
+      return () => {
+        active = false;
+      };
+    }
     const handle = setInterval(load, 3000);
     return () => {
       active = false;
       clearInterval(handle);
     };
-  }, [view]);
+  }, [view, hasOpenTaskWork]);
 
   useEffect(() => {
     let active = true;
@@ -3855,17 +3870,6 @@ function formatSizeGb(bytes) {
                       <button
                         className="btn btn-outline-dark btn-sm"
                         type="button"
-                        onClick={() => {
-                          setProjectFullCopy(Boolean(settings.default_full_project_copy));
-                          setShowCreateProject(true);
-                        }}
-                        title="Create a new project entry."
-                      >
-                        New project
-                      </button>
-                      <button
-                        className="btn btn-outline-dark btn-sm"
-                        type="button"
                         onClick={handleExportProjects}
                         title="Export project list as CSV."
                       >
@@ -4709,11 +4713,11 @@ function formatSizeGb(bytes) {
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, server_mode_enabled: e.target.checked }))
                         }
-                        title="Server mode: exports include real Content files and uploaded projects are treated as internal."
+                        title="Standalone mode: exports include real Content files and uploaded projects are treated as internal."
                         id="serverModeEnabled"
                       />
                       <label className="form-check-label" htmlFor="serverModeEnabled">
-                        Server mode
+                        Standalone mode
                       </label>
                     </div>
                   </div>
