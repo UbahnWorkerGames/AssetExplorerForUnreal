@@ -7435,11 +7435,6 @@ def _upload_asset_sync(
                     logger.warning("Upload rejected: project_id missing and could not be resolved (vendor/package=%s)", meta.get("package"))
                     raise HTTPException(status_code=400, detail="project_id missing and could not be resolved from meta")
 
-        if server_mode_enabled and project_id:
-            conn.execute("UPDATE projects SET source_preference = 'internal' WHERE id = ?", (int(project_id),))
-            _db_retry(conn.commit)
-            project_row = fetch_one(conn, "SELECT id, folder_path, source_path, source_folder FROM projects WHERE id = ?", (project_id,))
-
         existing = fetch_one(
             conn,
             "SELECT id, size_bytes FROM assets WHERE project_id = ? AND hash_full_blake3 = ? LIMIT 1",
@@ -7490,6 +7485,9 @@ def _upload_asset_sync(
             ),
         )
         _db_retry(write_conn.commit)
+        if server_mode_enabled and project_id and int(deployed_content_files or 0) > 0:
+            cur.execute("UPDATE projects SET source_preference = 'internal' WHERE id = ?", (int(project_id),))
+            _db_retry(write_conn.commit)
         write_conn.close()
         logger.info("Upload duplicate: refreshed images project_id=%s hash_full=%s", project_id, hash_full)
         return {"status": "updated_images", "id": existing["id"], "project_id": project_id, "deployed_content_files": deployed_content_files}
@@ -7585,6 +7583,9 @@ def _upload_asset_sync(
         settings.get("tag_language") or "",
     ))
     _db_retry(write_conn.commit)
+    if server_mode_enabled and project_id and int(deployed_content_files or 0) > 0:
+        cur.execute("UPDATE projects SET source_preference = 'internal' WHERE id = ?", (int(project_id),))
+        _db_retry(write_conn.commit)
     write_conn.close()
 
     return {"id": asset_id, "name": name, "project_id": project_id, "deployed_content_files": deployed_content_files}
