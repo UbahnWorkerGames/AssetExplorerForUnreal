@@ -1992,6 +1992,7 @@ class SettingsUpdate(BaseModel):
     export_capture360_discard_frames: Optional[int] = None
     export_upload_after_export: Optional[bool] = None
     server_mode_enabled: Optional[bool] = None
+    export_resolve_deep_roots: Optional[str] = None
     export_upload_path_template: Optional[str] = None
     export_check_path_template: Optional[str] = None
     skip_export_if_on_server: Optional[bool] = None
@@ -5192,6 +5193,7 @@ def _find_project_by_source(
     conn,
     source_path: Optional[str],
     source_folder: Optional[str],
+    deep_root_names: Optional[set[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     inferred_top = ""
     inferred_pack = ""
@@ -5247,8 +5249,9 @@ def _find_project_by_source(
         if any(val and val in normalized for val in row_values):
             return row
 
-    # 2) If source path includes /Content/<Top>/<Pack>/..., prefer <Pack>.
-    if inferred_pack:
+    # 2) If configured: for listed top roots, prefer /Content/<Top>/<Pack>/... -> <Pack>.
+    use_deep = bool(inferred_top and inferred_pack and deep_root_names and inferred_top in deep_root_names)
+    if use_deep:
         pack_matches = []
         for row in rows:
             row_source_folder = str(row.get("source_folder") or "").strip()
@@ -7254,6 +7257,8 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
         masked["ue_cmd_path"] = ""
     if "server_mode_enabled" not in masked:
         masked["server_mode_enabled"] = "false"
+    if "export_resolve_deep_roots" not in masked:
+        masked["export_resolve_deep_roots"] = ""
     default_export_check = "/assets/exists?hash={hash}&hash_type=blake3&source_path={source_path}"
     current_export_check = str(masked.get("export_check_path_template") or "").strip()
     if not current_export_check or current_export_check in {"/assets/exists?hash={hash}&hash_type=blake3", "/assets/exists?hash={hash}&hash_type=blake3&project_id={project_id}"}:
@@ -7471,6 +7476,7 @@ def _upload_asset_sync(
     conn = get_db()
     try:
         settings = get_settings(conn)
+        deep_root_names = {v.strip().lower() for v in _parse_csv_list(settings.get("export_resolve_deep_roots")) if v.strip()}
         raw_server_mode = str(settings.get("server_mode_enabled") or "").strip().lower()
         server_mode_enabled = raw_server_mode in {"1", "true", "yes", "on"}
         project_row = fetch_one(conn, "SELECT id, folder_path, source_path, source_folder FROM projects WHERE id = ?", (project_id,)) if project_id is not None else None
@@ -7478,7 +7484,7 @@ def _upload_asset_sync(
             logger.warning("Upload project_id %s not found in DB", project_id)
         if not project_row:
             if source_path:
-                by_source = _find_project_by_source(conn, source_path, None)
+                by_source = _find_project_by_source(conn, source_path, None, deep_root_names=deep_root_names)
                 if by_source:
                     project_id = int(by_source["id"])
                     project_row = fetch_one(conn, "SELECT id, folder_path, source_path, source_folder FROM projects WHERE id = ?", (project_id,))
@@ -8151,6 +8157,7 @@ def asset_exists(hash: str, hash_type: str = "blake3", project_id: Optional[int]
     column = _resolve_hash_column(hash_type)
     conn = get_db()
     settings = get_settings(conn)
+    deep_root_names = {v.strip().lower() for v in _parse_csv_list(settings.get("export_resolve_deep_roots")) if v.strip()}
     raw_skip = str(settings.get("skip_export_if_on_server") or "").strip().lower()
     skip_enabled = raw_skip in {"1", "true", "yes", "on"}
     if not skip_enabled:
@@ -8164,7 +8171,7 @@ def asset_exists(hash: str, hash_type: str = "blake3", project_id: Optional[int]
         return {"exists": False, "id": None}
     pid = int(project_id) if project_id is not None else 0
     if pid <= 0 and source_path:
-        row = _find_project_by_source(conn, source_path, None)
+        row = _find_project_by_source(conn, source_path, None, deep_root_names=deep_root_names)
         if row:
             pid = int(row.get("id") or 0)
     if pid <= 0:

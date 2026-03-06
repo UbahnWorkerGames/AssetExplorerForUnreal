@@ -664,6 +664,7 @@ export default function App() {
     export_anim_sequence_image_count: 4,
     export_capture360_discard_frames: 2,
     export_upload_after_export: true,
+    export_resolve_deep_roots: "",
     export_upload_path_template: "/assets/upload",
     export_check_path_template: "/assets/exists?hash={hash}&hash_type=blake3&source_path={source_path}",
     ue_cmd_path: "",
@@ -4876,6 +4877,20 @@ function formatSizeGb(bytes) {
                         title="Base URL of the Unreal listener/import bridge service."
                         value={settings.import_base_url || ""}
                         onChange={(e) => setSettings((prev) => ({ ...prev, import_base_url: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+                  <div className="settings-compact-item">
+                    <div className="form-row">
+                      <label className="form-label">Deep resolve roots (CSV)</label>
+                      <input
+                        className="form-control"
+                        placeholder="SUBURBS,ENV,MEGASCANS"
+                        title="Top folders where server resolve should use Content/<Top>/<Pack> instead of only <Top>."
+                        value={settings.export_resolve_deep_roots || ""}
+                        onChange={(e) =>
+                          setSettings((prev) => ({ ...prev, export_resolve_deep_roots: e.target.value }))
+                        }
                       />
                     </div>
                   </div>
