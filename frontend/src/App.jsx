@@ -3438,7 +3438,7 @@ function formatSizeGb(bytes) {
                                   onChange={() => toggleProject(project.id)}
                                 />
                                 <span className="project-filter-name" style={{ maxWidth: `${projectNameWrap}ch` }}>
-                                  {project.name}
+                                  #{project.id} {project.name}
                                 </span>
                                 <span className="filter-meta">
                                   {projectStats[project.id]?.matched ?? 0}/{projectStats[project.id]?.total ?? 0}
@@ -4227,7 +4227,7 @@ function formatSizeGb(bytes) {
                               )}
                             </div>
                             <div className="card-body project-body">
-                              <h3 className="project-title">{project.name || "-"}</h3>
+                              <h3 className="project-title">#{project.id} {project.name || "-"}</h3>
                               <div className="project-meta">
                                 <span className="project-meta-label">Link</span>
                                 {project.link ? (
