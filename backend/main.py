@@ -6599,7 +6599,7 @@ def upload_project_screenshot(
 
     try:
         rel = dest.resolve().relative_to(DATA_DIR.resolve())
-        screenshot_url = f"/media/{str(rel).replace('\\', '/')}"
+        screenshot_url = f"/media/{rel.as_posix()}"
     except ValueError:
         screenshot_url = ""
 
