@@ -5157,6 +5157,7 @@ def _find_project_by_source(
     source_folder: Optional[str],
 ) -> Optional[Dict[str, Any]]:
     inferred_top = ""
+    inferred_pack = ""
     if source_path:
         try:
             s = Path(source_path).expanduser()
@@ -5166,8 +5167,11 @@ def _find_project_by_source(
                 idx = lower_parts.index("content")
                 if idx + 1 < len(parts):
                     inferred_top = str(parts[idx + 1]).strip().lower()
+                if idx + 2 < len(parts):
+                    inferred_pack = str(parts[idx + 2]).strip().lower()
         except Exception:
             inferred_top = ""
+            inferred_pack = ""
     if source_folder:
         cleaned = re.split(r"[\/]+", source_folder.strip().strip("/\\"))
         source_folder = cleaned[-1] if cleaned else source_folder
@@ -5185,9 +5189,11 @@ def _find_project_by_source(
     if include_project_root:
         candidates.append(resolved.get("project_root"))
     normalized = {val for val in (_normalize_path_value(c) for c in candidates) if val}
-    if not normalized:
-        return None
     rows = fetch_all(conn, "SELECT * FROM projects")
+    if not rows:
+        return None
+
+    # 1) Exact path-based match first.
     for row in rows:
         folder_path = row.get("folder_path") or ""
         row_source_folder = str(row.get("source_folder") or "").strip()
@@ -5201,8 +5207,29 @@ def _find_project_by_source(
         ]
         if any(val and val in normalized for val in row_values):
             return row
-        if inferred_top and row_source_folder_name and inferred_top == row_source_folder_name:
-            return row
+
+    # 2) If source path includes /Content/<Top>/<Pack>/..., prefer <Pack>.
+    if inferred_pack:
+        pack_matches = []
+        for row in rows:
+            row_source_folder = str(row.get("source_folder") or "").strip()
+            row_source_folder_name = Path(row_source_folder).name.strip().lower() if row_source_folder else ""
+            if row_source_folder_name and row_source_folder_name == inferred_pack:
+                pack_matches.append(row)
+        if len(pack_matches) == 1:
+            return pack_matches[0]
+
+    # 3) Fallback to /Content/<Top>/... only if unique to avoid wrong routing.
+    if inferred_top:
+        top_matches = []
+        for row in rows:
+            row_source_folder = str(row.get("source_folder") or "").strip()
+            row_source_folder_name = Path(row_source_folder).name.strip().lower() if row_source_folder else ""
+            if row_source_folder_name and row_source_folder_name == inferred_top:
+                top_matches.append(row)
+        if len(top_matches) == 1:
+            return top_matches[0]
+
     return None
 
 
