@@ -652,7 +652,7 @@ export default function App() {
     groq_model: "",
     ollama_model: "",
     import_base_url: "http://127.0.0.1:9090",
-    server_mode_enabled: true,
+    server_mode_enabled: false,
     skip_export_if_on_server: true,
     export_overwrite_zips: false,
     export_default_image_count: 1,
