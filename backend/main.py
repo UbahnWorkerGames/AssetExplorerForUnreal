@@ -229,6 +229,12 @@ def _count_archived_batch_files() -> int:
     return total
 
 
+def _count_startup_jobs() -> int:
+    if not STARTUP_JOBS_DIR.exists():
+        return 0
+    return sum(1 for path in STARTUP_JOBS_DIR.glob("*.json") if path.is_file())
+
+
 def _write_startup_job(kind: str, payload: Optional[Dict[str, Any]] = None) -> str:
     STARTUP_JOBS_DIR.mkdir(parents=True, exist_ok=True)
     safe_kind = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(kind or "job")).strip("_") or "job"
@@ -1395,7 +1401,7 @@ def _recover_openai_batches_once(
                 status = payload.get("status") or ""
                 output_file_id = payload.get("output_file_id")
                 _db_retry_call(
-                    lambda: _openai_batch_upsert(
+                    lambda flow=flow, batch_id=batch_id, row_provider=row_provider, row=row, status=status, output_file_id=output_file_id: _openai_batch_upsert(
                         flow=flow,
                         batch_id=batch_id,
                         provider=row_provider,
@@ -1417,7 +1423,7 @@ def _recover_openai_batches_once(
                         age_seconds = 0
                     if age_seconds > max(60, int(stale_minutes)) * 60:
                         _db_retry_call(
-                            lambda: _openai_batch_upsert(
+                            lambda flow=flow, batch_id=batch_id, row_provider=row_provider, row=row, status=status, age_seconds=age_seconds: _openai_batch_upsert(
                                 flow=flow,
                                 batch_id=batch_id,
                                 provider=row_provider,
@@ -1433,7 +1439,7 @@ def _recover_openai_batches_once(
                     continue
                 if status != "completed" or not output_file_id:
                     _db_retry_call(
-                        lambda: _openai_batch_upsert(
+                        lambda flow=flow, batch_id=batch_id, row_provider=row_provider, row=row, status=status: _openai_batch_upsert(
                             flow=flow,
                             batch_id=batch_id,
                             provider=row_provider,
@@ -1480,7 +1486,7 @@ def _recover_openai_batches_once(
                 total_done += int(stats.get("done") or 0)
                 total_errors += int(stats.get("errors") or 0)
                 _db_retry_call(
-                    lambda: _openai_batch_mark_applied(
+                    lambda batch_id=batch_id, flow=flow, row=row, stats=stats: _openai_batch_mark_applied(
                         batch_id=batch_id,
                         flow=flow,
                         task_id=int(row.get("task_id") or 0) if row.get("task_id") is not None else None,
@@ -1500,7 +1506,7 @@ def _recover_openai_batches_once(
             except Exception as exc:
                 try:
                     _db_retry_call(
-                        lambda: _openai_batch_upsert(
+                        lambda flow=flow, batch_id=batch_id, row_provider=row_provider, row=row, exc=exc: _openai_batch_upsert(
                             flow=flow,
                             batch_id=batch_id,
                             provider=row_provider,
@@ -1517,7 +1523,7 @@ def _recover_openai_batches_once(
                 continue
             finally:
                 try:
-                    _db_retry_call(lambda: _openai_batch_release(batch_id, owner))
+                    _db_retry_call(lambda batch_id=batch_id, owner=owner: _openai_batch_release(batch_id, owner))
                 except Exception:
                     pass
 
@@ -1540,7 +1546,7 @@ def _openai_recovery_worker() -> None:
                 )
                 time.sleep(2)
             else:
-                time.sleep(14 if has_active else 12)
+                time.sleep(12 if has_active else 14)
         except Exception as exc:
             logger.warning("OpenAI recovery worker error: %s", exc)
             time.sleep(10)
@@ -2584,7 +2590,7 @@ def _run_batch_tagging(
                             )
                     if progress_hook is not None:
                         progress_hook(0, 0, f"Writing tag updates: {batch_id}")
-                        _flush_tag_batch_chunked(batch_rows, settings)
+                    _flush_tag_batch_chunked(batch_rows, settings)
 
                     pending.pop(batch_id, None)
                     progressed = True
@@ -3013,7 +3019,7 @@ def _run_batch_translate_names(
                             "hash_main": row.get("hash_main_blake3") or "",
                             "hash_full": row.get("hash_full_blake3") or "",
                             "created_at": row.get("created_at") or now_iso(),
-                            "mark_name_tags_done": True,
+                            "mark_name_translate_done": True,
                         }
                     )
                     done += 1
@@ -3139,7 +3145,7 @@ def _flush_project_eras(conn: sqlite3.Connection, batch_size: int = 900) -> None
             updates.append((era_value, pid))
         if updates:
             conn.executemany("UPDATE projects SET project_era = ? WHERE id = ?", updates)
-            _db_retry(conn.commit)
+            _db_retry(lambda: conn.commit())
 
 
 def _set_embed_progress(key: str, data: Dict[str, Any]) -> None:
@@ -4228,7 +4234,7 @@ def _tag_project_assets(
         missing_min_tags = 1
 
     if mode == "missing":
-        candidates = [row for row in rows if not row.get("tags_done_at")]
+        candidates = [row for row in rows if _count_tags_json(row.get("tags_json")) < missing_min_tags]
     else:
         candidates = rows
 
@@ -5004,7 +5010,7 @@ def _normalize_project_folder_for_project(conn: Optional[sqlite3.Connection], pr
         if conn is not None and project.get("id") is not None:
             try:
                 conn.execute("UPDATE projects SET folder_path = ? WHERE id = ?", (normalized, int(project["id"])))
-                _db_retry(conn.commit)
+                _db_retry(lambda: conn.commit())
             except Exception:
                 pass
     return normalized or raw
@@ -5203,7 +5209,7 @@ def _get_cached_source_size(
             "UPDATE projects SET source_size_bytes = ?, source_size_updated_at = ? WHERE id = ?",
             (int(size), now_iso(), row.get("id")),
         )
-        _db_retry(conn.commit)
+        _db_retry(lambda: conn.commit())
     except Exception:
         pass
     return int(size)
@@ -5397,7 +5403,7 @@ def _create_project_from_root(root_name: str) -> int:
             "external",
         ),
     )
-    _db_retry(conn.commit)
+    _db_retry(lambda: conn.commit())
     project_id = cur.lastrowid
     conn.close()
     logger.info("Auto-create project: created id=%s name=%s", project_id, name)
@@ -5796,12 +5802,30 @@ def startup() -> None:
     purge = str(settings.get("purge_assets_on_startup") or "").strip().lower()
     if purge in {"1", "true", "yes", "on"}:
         conn.execute("DELETE FROM assets")
-    _db_retry(conn.commit)
+    _db_retry(lambda: conn.commit())
     conn.close()
+    startup_jobs_total = _count_startup_jobs()
     startup_total = _count_archived_batch_files()
+    startup_work_total = int(startup_jobs_total + startup_total)
+    if startup_work_total <= 0:
+        _startup_import_set(
+            running=False,
+            total=0,
+            done=0,
+            processed=0,
+            failed=0,
+            skipped=0,
+            current_flow="",
+            started_at=None,
+            finished_at=now_iso(),
+        )
+        _ensure_task_worker()
+        _ensure_openai_recovery_worker()
+        _configure_frontend(settings)
+        return
     _startup_import_set(
         running=True,
-        total=int(startup_total),
+        total=int(startup_work_total),
         done=0,
         processed=0,
         failed=0,
@@ -5811,7 +5835,7 @@ def startup() -> None:
         finished_at=None,
     )
     logger.info("Startup: importing archived batch outputs from %s", BATCH_OUTPUT_DIR)
-    _run_startup_import_worker(dict(settings))
+    threading.Thread(target=_run_startup_import_worker, args=(dict(settings),), daemon=True).start()
     if _startup_import_snapshot().get("running"):
         logger.warning("Startup import still running; frontend stays disabled")
     else:
@@ -6022,7 +6046,7 @@ def create_project(payload: ProjectCreate) -> Dict[str, Any]:
             source_pref,
         ),
     )
-    _db_retry(conn.commit)
+    _db_retry(lambda: conn.commit())
     project_id = cur.lastrowid
     conn.close()
 
@@ -6237,7 +6261,7 @@ def resolve_project(source_path: str, auto_create: bool = True) -> Dict[str, Any
                 "external",
             ),
         )
-        _db_retry(conn.commit)
+        _db_retry(lambda: conn.commit())
         project_id = cur.lastrowid
         conn.close()
         _set_copy_progress(project_id, {"status": "done", "copied": 0, "total": 0})
@@ -6546,7 +6570,7 @@ def update_project(project_id: int, payload: ProjectUpdate) -> Dict[str, Any]:
         params.append(value)
     params.append(project_id)
     conn.execute(f"UPDATE projects SET {', '.join(fields)} WHERE id = ?", params)
-    _db_retry(conn.commit)
+    _db_retry(lambda: conn.commit())
     conn.close()
     return {"status": "ok"}
 
@@ -6594,7 +6618,7 @@ def upload_project_screenshot(
 
     cur = conn.cursor()
     cur.execute("UPDATE projects SET screenshot_path = ? WHERE id = ?", (str(dest), project_id))
-    _db_retry(conn.commit)
+    _db_retry(lambda: conn.commit())
     conn.close()
 
     try:
@@ -6722,7 +6746,7 @@ def reimport_project(project_id: int, payload: ProjectReimport) -> Dict[str, Any
         "UPDATE projects SET source_path = ?, source_folder = ?, full_project_copy = ?, reimported_once = 1, source_preference = 'internal', folder_path = ? WHERE id = ?",
         (internal_source_path, source_folder, 1 if full_copy else 0, canonical_folder_path, project_id),
     )
-    _db_retry(conn.commit)
+    _db_retry(lambda: conn.commit())
     conn.close()
 
     folder_path = Path(canonical_folder_path)
@@ -7058,7 +7082,7 @@ def update_settings(payload: SettingsUpdate) -> Dict[str, str]:
             "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (key, value),
         )
-    _db_retry(conn.commit)
+    _db_retry(lambda: conn.commit())
     conn.close()
     return {"status": "ok"}
 
@@ -7312,23 +7336,11 @@ def reset_db() -> Dict[str, Any]:
         logger.warning(f"DB backup failed: {exc}")
         backup_path = None
 
-@app.post("/tasks/cancel-all")
-def cancel_all_tasks() -> Dict[str, Any]:
-    def _write() -> None:
-        conn = get_db()
-        conn.execute("UPDATE tasks SET cancel_flag = 1 WHERE status IN ('queued','running')")
-        conn.commit()
-        conn.close()
-
-    _db_retry(_write)
-    return {"status": "canceling"}
-
-
     conn.execute("DELETE FROM asset_tags")
     conn.execute("DELETE FROM assets")
     conn.execute("DELETE FROM projects")
     conn.execute("DELETE FROM assets_fts")
-    _db_retry(conn.commit)
+    _db_retry(lambda: conn.commit())
     conn.close()
 
     with COPY_LOCK:
@@ -7341,6 +7353,17 @@ def cancel_all_tasks() -> Dict[str, Any]:
         EMBED_PROGRESS.clear()
 
     return {"status": "ok", "backup_path": str(backup_path) if backup_path else None}
+
+@app.post("/tasks/cancel-all")
+def cancel_all_tasks() -> Dict[str, Any]:
+    def _write() -> None:
+        conn = get_db()
+        conn.execute("UPDATE tasks SET cancel_flag = 1 WHERE status IN ('queued','running')")
+        conn.commit()
+        conn.close()
+
+    _db_retry(_write)
+    return {"status": "canceling"}
 
 
 
@@ -7951,7 +7974,7 @@ def _migrate_internal_source_paths_to_relative(conn: sqlite3.Connection) -> None
         conn.execute("UPDATE projects SET source_path = ? WHERE id = ?", (rel_path, project_id))
         changed += 1
     if changed:
-        _db_retry(conn.commit)
+        _db_retry(lambda: conn.commit())
 
 
 def _count_tags_json(raw_tags: Any) -> int:
@@ -8125,7 +8148,7 @@ def _run_projects_import_task(task_id: int) -> None:
                     }
                 )
                 pending_progress = idx
-            if pending >= batch_size:
+            if pending >= block_size:
                 if pending_progress is not None:
                     progress_payload = {"status": "running", "total": total, "done": pending_progress, "errors": errors}
                     cur.execute(
@@ -8133,7 +8156,7 @@ def _run_projects_import_task(task_id: int) -> None:
                         (json.dumps(progress_payload), "importing", task_id),
                     )
                     pending_progress = None
-                _db_retry(conn.commit)
+                _db_retry(lambda: conn.commit())
                 pending = 0
     if pending:
         if pending_progress is not None:
@@ -8143,7 +8166,7 @@ def _run_projects_import_task(task_id: int) -> None:
                 (json.dumps(progress_payload), "importing", task_id),
             )
             pending_progress = None
-        _db_retry(conn.commit)
+        _db_retry(lambda: conn.commit())
     _flush_project_eras(conn)
     conn.close()
 
@@ -8178,7 +8201,7 @@ def _clear_all_tags(task_id: Optional[int] = None) -> None:
     cur = conn.cursor()
     cur.execute("UPDATE assets SET tags_json = '[]', embedding_json = NULL")
     cur.execute("DELETE FROM asset_tags")
-    _db_retry(conn.commit)
+    _db_retry(lambda: conn.commit())
     conn.close()
     if task_id is not None:
         _task_progress(task_id, "running", 1, 1, 0)
@@ -8392,7 +8415,7 @@ def _run_tags_import_task(task_id: int) -> None:
                         (json.dumps(progress_payload), "importing", task_id),
                     )
                     pending_progress = None
-                _db_retry(conn.commit)
+                _db_retry(lambda: conn.commit())
                 pending = 0
         if pending:
             if pending_progress is not None:
@@ -8402,7 +8425,7 @@ def _run_tags_import_task(task_id: int) -> None:
                     (json.dumps(progress_payload), "importing", task_id),
                 )
                 pending_progress = None
-            _db_retry(conn.commit)
+            _db_retry(lambda: conn.commit())
     conn.close()
 
     logger.info(
@@ -8881,7 +8904,7 @@ def list_asset_types() -> Dict[str, Any]:
                 updates.append((value, row["id"]))
         if updates:
             cur.executemany("UPDATE assets SET type = ? WHERE id = ?", updates)
-            _db_retry(conn.commit)
+            _db_retry(lambda: conn.commit())
         types = sorted(inferred)
     catalog = _parse_csv_list(settings.get("asset_type_catalog"))
     default_types = [
@@ -8907,7 +8930,7 @@ def delete_asset(asset_id: int) -> Dict[str, str]:
     conn = get_db()
     cur = conn.cursor()
     cur.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
-    _db_retry(conn.commit)
+    _db_retry(lambda: conn.commit())
     conn.close()
     return {"status": "deleted"}
 
@@ -8919,7 +8942,7 @@ def delete_project_assets(project_id: int) -> Dict[str, Any]:
     cur.execute("SELECT COUNT(*) AS count FROM assets WHERE project_id = ?", (project_id,))
     count_row = cur.fetchone()
     cur.execute("DELETE FROM assets WHERE project_id = ?", (project_id,))
-    _db_retry(conn.commit)
+    _db_retry(lambda: conn.commit())
     conn.close()
     return {"status": "deleted", "count": count_row[0] if count_row else 0}
 
@@ -8937,7 +8960,7 @@ def delete_project(project_id: int) -> Dict[str, Any]:
     count_row = cur.fetchone()
     cur.execute("DELETE FROM assets WHERE project_id = ?", (project_id,))
     cur.execute("DELETE FROM projects WHERE id = ?", (project_id,))
-    _db_retry(conn.commit)
+    _db_retry(lambda: conn.commit())
     conn.close()
     return {"status": "deleted", "assets_deleted": count_row[0] if count_row else 0}
 
@@ -9012,7 +9035,7 @@ def backfill_asset_types(limit: int = 10000) -> Dict[str, Any]:
         if inferred:
             cur.execute("UPDATE assets SET type = ? WHERE id = ?", (inferred, row["id"]))
             updated += 1
-    _db_retry(conn.commit)
+    _db_retry(lambda: conn.commit())
     conn.close()
     return {"updated": updated, "processed": len(rows)}
 
@@ -9146,7 +9169,7 @@ def update_asset_tags(asset_id: int, payload: AssetTagUpdate) -> Dict[str, Any]:
         translated_tags,
         settings.get("tag_language") or "",
     )
-    _db_retry(conn.commit)
+    _db_retry(lambda: conn.commit())
     conn.close()
     return {"status": "ok", "tags": tags}
 
@@ -9206,12 +9229,12 @@ def merge_asset_tags(payload: AssetTagBulkMerge) -> Dict[str, Any]:
             updated += 1
             pending += 1
             if pending >= batch_size:
-                _db_retry(conn.commit)
+                _db_retry(lambda: conn.commit())
                 pending = 0
         except Exception:
             errors += 1
     if pending:
-        _db_retry(conn.commit)
+        _db_retry(lambda: conn.commit())
     conn.close()
     return {"status": "ok", "updated": updated, "missing": missing, "errors": errors}
 
@@ -9293,7 +9316,7 @@ def generate_asset_tags(asset_id: int) -> Dict[str, Any]:
         translated_tags,
         settings.get("tag_language") or "",
     )
-    _db_retry(conn.commit)
+    _db_retry(lambda: conn.commit())
     conn.close()
 
     conn = get_db()
@@ -9402,4 +9425,3 @@ def generate_project_setcard(project_id: int, force: bool = Query(False)) -> Dic
 def generate_project_previews(project_id: int) -> Dict[str, Any]:
     _queue_preview_generation(project_id)
     return {"status": "queued"}
-
