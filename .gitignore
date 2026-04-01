@@ -33,3 +33,9 @@ yarn-error.log*
 Thumbs.db (Windows)
 data/*
 !data/.gitkeep
+
+# --- Local generated artifacts ---
+backend/backend.zip
+projects_export_*.csv
+helper/fab_import_one.py
+helper/fab_import_one.ini
