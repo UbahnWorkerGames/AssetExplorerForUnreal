@@ -408,6 +408,9 @@ export default function App() {
   const [pendingNext, setPendingNext] = useState(false);
   const prevTagStatusRef = useRef({});
   const assetsRequestRef = useRef(0);
+  const assetsAbortRef = useRef(null);
+  const assetsLoadingToastRef = useRef(null);
+  const didInitEraSelectionRef = useRef(false);
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [openaiKeyInput, setOpenaiKeyInput] = useState("");
   const [openrouterKeyInput, setOpenrouterKeyInput] = useState("");
@@ -438,12 +441,6 @@ export default function App() {
   const [projectEraFilter, setProjectEraFilter] = useState("__all__");
   const [naniteFilter, setNaniteFilter] = useState("all");
   const [collisionFilter, setCollisionFilter] = useState("all");
-  const [useSemanticSearch, setUseSemanticSearch] = useState(() => {
-    if (typeof window === "undefined") return true;
-    const stored = window.localStorage.getItem("useSemanticSearch");
-    if (stored === null) return true;
-    return stored === "true";
-  });
   const [contentDir, setContentDir] = useState("");
   const [overwriteExisting, setOverwriteExisting] = useState(false);
   const [migrateStatus, setMigrateStatus] = useState(null);
@@ -1035,7 +1032,7 @@ export default function App() {
     }, [value, delayMs]);
     return debounced;
   }
-  const debouncedQuery = useDebounce(queryInput, 400);
+  const debouncedQuery = useDebounce(queryInput, 1000);
   const effectiveQuery = debouncedQuery;
   const trimmedQuery = effectiveQuery.trim();
   const filterParams = useMemo(() => {
@@ -1058,14 +1055,13 @@ export default function App() {
       projects.length > 0 && uniqueSelectedProjects.length >= projects.length;
     const useProjectFilter = projectFiltersActive || styleFiltersActive || eraFiltersActive;
     return {
-      query: trimmedQuery && (!useSemanticSearch || trimmedQuery.length >= 3) ? trimmedQuery : undefined,
+      query: trimmedQuery || undefined,
       project_ids:
         useProjectFilter && filteredProjectIds.length
           ? filteredProjectIds.join(",")
           : undefined,
       types: typeFiltersActive ? selectedTypes.join(",") : undefined,
       tag: undefined,
-      semantic: useSemanticSearch ? "1" : "0",
       nanite: naniteFilter === "with" ? "1" : naniteFilter === "without" ? "0" : undefined,
       collision: collisionFilter === "with" ? "1" : collisionFilter === "without" ? "0" : undefined,
       page,
@@ -1082,7 +1078,6 @@ export default function App() {
     projects,
     page,
     pageSize,
-    useSemanticSearch,
     naniteFilter,
     collisionFilter,
   ]);
@@ -1337,23 +1332,26 @@ export default function App() {
     }
   }, []);
   useEffect(() => {
-    if (!selectedEras.length && eraOptions.length) {
-      setSelectedEras(eraOptions);
-    }
-  }, [eraOptions, selectedEras.length]);
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem("useSemanticSearch", String(useSemanticSearch));
-    }
-  }, [useSemanticSearch]);
+    if (didInitEraSelectionRef.current || !eraOptions.length) return;
+    didInitEraSelectionRef.current = true;
+    setSelectedEras(eraOptions);
+  }, [eraOptions]);
   useEffect(() => {
     let active = true;
     const requestId = ++assetsRequestRef.current;
-    toast.info("Loading assets...");
+    if (assetsAbortRef.current) {
+      assetsAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    assetsAbortRef.current = controller;
+    if (assetsLoadingToastRef.current) {
+      toast.dismiss(assetsLoadingToastRef.current);
+    }
+    assetsLoadingToastRef.current = toast.info("Loading assets...");
     isFetchingAssetsRef.current = true;
     setIsFetchingAssets(true);
     setIsLoadingMore(page > 1);
-    fetchAssets(filterParams)
+    fetchAssets(filterParams, { signal: controller.signal })
       .then((data) => {
         if (!active || requestId !== assetsRequestRef.current) return;
         if (page === 1) {
@@ -1401,24 +1399,52 @@ export default function App() {
         });
         lastLoadedPageRef.current = page;
         pageRequestRef.current = false;
-        toast.dismiss();
+        if (assetsLoadingToastRef.current) {
+          toast.dismiss(assetsLoadingToastRef.current);
+          assetsLoadingToastRef.current = null;
+        }
         setIsLoadingMore(false);
         isFetchingAssetsRef.current = false;
         setIsFetchingAssets(false);
+        if (assetsAbortRef.current === controller) {
+          assetsAbortRef.current = null;
+        }
       })
       .catch((err) => {
+        if (err?.name === "AbortError") {
+          if (assetsLoadingToastRef.current) {
+            toast.dismiss(assetsLoadingToastRef.current);
+            assetsLoadingToastRef.current = null;
+          }
+          return;
+        }
         if (active && requestId === assetsRequestRef.current) {
           console.error(err);
+          if (assetsLoadingToastRef.current) {
+            toast.dismiss(assetsLoadingToastRef.current);
+            assetsLoadingToastRef.current = null;
+          }
           toast.error("Failed to load assets");
           setIsLoadingMore(false);
           setPendingNext(false);
           pageRequestRef.current = false;
           isFetchingAssetsRef.current = false;
           setIsFetchingAssets(false);
+          if (assetsAbortRef.current === controller) {
+            assetsAbortRef.current = null;
+          }
         }
       });
     return () => {
       active = false;
+      controller.abort();
+      if (assetsLoadingToastRef.current) {
+        toast.dismiss(assetsLoadingToastRef.current);
+        assetsLoadingToastRef.current = null;
+      }
+      if (assetsAbortRef.current === controller) {
+        assetsAbortRef.current = null;
+      }
     };
   }, [filterParams, page, pageSize, refreshKey]);
   useEffect(() => {
@@ -2813,9 +2839,7 @@ export default function App() {
   function handleTagClick(tag) {
     if (!tag) return;
     setQueryInput(tag);
-    if (!useSemanticSearch) {
-      resetPaging(true, true);
-    }
+    resetPaging(true, true);
     handleViewClick("assets", true);
   }
 
@@ -3216,17 +3240,6 @@ function formatSizeGb(bytes) {
                       resetPaging(true, true);
                     }}
                   />
-                  <label className="filter-item">
-                    <input
-                      type="checkbox"
-                      checked={useSemanticSearch}
-                      onChange={(e) => {
-                        setUseSemanticSearch(e.target.checked);
-                        resetPaging(true, true);
-                      }}
-                    />
-                    Semantic search
-                  </label>
                 </div>
                 <div className="sidebar-block">
                   <div className="sidebar-title">Overview</div>

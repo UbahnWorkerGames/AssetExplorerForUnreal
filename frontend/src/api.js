@@ -188,7 +188,7 @@ export async function openProject(id, target = "auto") {
   return res.json();
 }
 
-export async function fetchAssets(params = {}) {
+export async function fetchAssets(params = {}, options = {}) {
   const url = new URL(`${API_BASE}/assets`);
   if (params.semantic === "0") {
     url.searchParams.set("semantic", "0");
@@ -198,7 +198,7 @@ export async function fetchAssets(params = {}) {
       url.searchParams.set(key, value);
     }
   });
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: options.signal });
   return res.json();
 }
 
@@ -447,4 +447,3 @@ async function handleJson(res) {
   }
   return res.json();
 }
-

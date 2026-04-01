@@ -5128,6 +5128,10 @@ def _build_embedding_text(
     return " ".join([p for p in parts if p])
 
 
+def _tokenize_search_text(value: str) -> List[str]:
+    return [token for token in re.findall(r"[\w-]+", str(value or "").lower()) if token]
+
+
 def _normalize_path_value(value: Optional[str]) -> str:
     if not value:
         return ""
@@ -8661,6 +8665,9 @@ def list_assets(
 ) -> Dict[str, Any]:
     conn = get_db()
     settings = get_settings(conn)
+    query = str(query or "").strip()
+    if query and semantic and len(query) < 3:
+        semantic = False
     try:
         display_limit = int(settings.get("tag_display_limit") or 0)
     except ValueError:
@@ -8670,10 +8677,14 @@ def list_assets(
     use_fts = bool(query and not semantic)
 
     def _fts_escape(term: str) -> str:
-        cleaned = term.replace('"', '""').strip()
-        if " " in cleaned:
-            return f"\"{cleaned}\""
-        return cleaned
+        cleaned = str(term or "").strip()
+        tokens = [token.strip().replace('"', '""') for token in re.findall(r"[\w-]+", cleaned, flags=re.UNICODE)]
+        if tokens:
+            return " AND ".join(f'{token}*' for token in tokens)
+        fallback = cleaned.replace('"', '""')
+        if " " in fallback:
+            return f"\"{fallback}\""
+        return fallback
 
     if project_ids:
         ids = [pid.strip() for pid in project_ids.split(",") if pid.strip().isdigit()]
@@ -8761,15 +8772,50 @@ def list_assets(
     total_all = total_all_row["count"] if total_all_row else 0
 
     if query and semantic:
-        if len(query.strip()) < 3:
-            semantic = False
-        max_candidates = 500
+        max_candidates = 2000
     if query and semantic:
-        rows = fetch_all(
-            conn,
-            f"SELECT a.*, t.tags_translated_json, p.art_style AS project_art_style, p.project_era {base} {where} {order_by} LIMIT ?",
-            params + [max_candidates],
+        candidate_rows: List[Dict[str, Any]] = []
+        semantic_candidate_base = (
+            "FROM assets a "
+            "JOIN assets_fts ON assets_fts.rowid = a.id "
+            "JOIN projects p ON p.id = a.project_id "
+            "LEFT JOIN asset_tags t ON t.hash_full_blake3 = a.hash_full_blake3"
         )
+        semantic_candidate_filters = list(filters)
+        semantic_candidate_params = list(params)
+        semantic_candidate_filters.append("assets_fts MATCH ?")
+        semantic_candidate_params.append(_fts_escape(query))
+        semantic_candidate_where = (
+            f"WHERE {' AND '.join(semantic_candidate_filters)}" if semantic_candidate_filters else ""
+        )
+        candidate_rows = fetch_all(
+            conn,
+            f"SELECT a.*, t.tags_translated_json, p.art_style AS project_art_style, p.project_era "
+            f"{semantic_candidate_base} {semantic_candidate_where} LIMIT ?",
+            semantic_candidate_params + [max_candidates],
+        )
+        if not candidate_rows:
+            like_value = f"%{query.lower()}%"
+            semantic_candidate_filters = list(filters)
+            semantic_candidate_params = list(params)
+            semantic_candidate_filters.append(
+                "("
+                "lower(a.name) LIKE ? "
+                "OR lower(a.description) LIKE ? "
+                "OR EXISTS (SELECT 1 FROM json_each(a.tags_json) jq WHERE lower(CAST(jq.value AS TEXT)) LIKE ?)"
+                ")"
+            )
+            semantic_candidate_params.extend([like_value, like_value, like_value])
+            semantic_candidate_where = (
+                f"WHERE {' AND '.join(semantic_candidate_filters)}" if semantic_candidate_filters else ""
+            )
+            candidate_rows = fetch_all(
+                conn,
+                f"SELECT a.*, t.tags_translated_json, p.art_style AS project_art_style, p.project_era "
+                f"{base} {semantic_candidate_where} LIMIT ?",
+                semantic_candidate_params + [max_candidates],
+            )
+        rows = candidate_rows
         try:
             query_vec = embed_text(query)
         except Exception as exc:
@@ -8812,17 +8858,39 @@ def list_assets(
             except Exception as exc:
                 logger.warning("Semantic fallback embedding failed for %s row(s): %s", len(missing_texts), exc)
         scored = []
+        query_lc = query.lower()
+        query_tokens = _tokenize_search_text(query_lc)
+        min_semantic_score = 0.35
         for row in rows:
             try:
                 emb = json.loads(row.get("embedding_json") or "[]")
             except json.JSONDecodeError:
                 emb = []
-            score = cosine_similarity(query_vec, emb)
-            if score > 0:
-                scored.append((score, row))
+            semantic_score = cosine_similarity(query_vec, emb)
+            name_text = str(row.get("name") or "").lower()
+            description_text = str(row.get("description") or "").lower()
+            try:
+                tags_text = " ".join(json.loads(row.get("tags_json") or "[]")).lower()
+            except Exception:
+                tags_text = ""
+            try:
+                translated_text = " ".join(json.loads(row.get("tags_translated_json") or "[]")).lower()
+            except Exception:
+                translated_text = ""
+            search_blob = " ".join(part for part in [name_text, description_text, tags_text, translated_text] if part)
+
+            lexical_bonus = 0.0
+            if query_lc and query_lc in search_blob:
+                lexical_bonus += 0.30
+            if query_tokens:
+                matched_tokens = sum(1 for token in query_tokens if token in search_blob)
+                lexical_bonus += min(0.20, 0.06 * matched_tokens)
+
+            combined_score = semantic_score + lexical_bonus
+            if semantic_score >= min_semantic_score or lexical_bonus > 0:
+                scored.append((combined_score, row))
         scored.sort(key=lambda item: item[0], reverse=True)
         if not scored:
-            query_lc = query.lower()
             fallback_filters = list(filters)
             fallback_params = list(params)
             fallback_filters.append(
