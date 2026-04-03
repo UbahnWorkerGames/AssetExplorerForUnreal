@@ -37,7 +37,6 @@ from PIL import Image, ImageDraw, ImageFont
 from app_config import get_app_settings
 from db import DB_PATH, fetch_all, fetch_one, get_db, get_db_dep, init_db
 from services.asset_processing import process_asset_zip
-from services.embeddings import cosine_similarity, embed_text, embed_texts
 from services.llm_tags import (
     DEFAULT_TEMPLATE,
     TRANSLATE_TEMPLATE,
@@ -272,11 +271,7 @@ def _run_startup_jobs(settings: Dict[str, str]) -> Dict[str, int]:
                 data = json.load(fh)
             kind = str(data.get("kind") or "").strip()
             logger.info("Startup jobs: %s/%s kind=%s file=%s", idx, total, kind or "unknown", path.name)
-            if kind == "embeddings_all":
-                _regenerate_embeddings(None, task_id=None)
-                processed += 1
-            else:
-                skipped += 1
+            skipped += 1
             dest = processed_root / path.name
             path.replace(dest)
         except Exception as exc:
@@ -295,6 +290,85 @@ def _run_startup_jobs(settings: Dict[str, str]) -> Dict[str, int]:
         total,
     )
     return {"total": total, "processed": processed, "failed": failed, "skipped": skipped}
+
+
+def _repair_no_pic_tags_on_startup() -> Dict[str, int]:
+    conn = get_db()
+    updated_assets = 0
+    updated_tag_rows = 0
+    scanned = 0
+
+    def _load_tags(raw: Any) -> List[str]:
+        if raw is None:
+            return []
+        if isinstance(raw, list):
+            values = raw
+        else:
+            try:
+                values = json.loads(str(raw) or "[]")
+            except Exception:
+                return []
+        if not isinstance(values, list):
+            return []
+        cleaned: List[str] = []
+        for item in values:
+            value = str(item).strip()
+            if value and value not in cleaned:
+                cleaned.append(value)
+        return cleaned
+
+    no_pic_expr = "REPLACE(REPLACE(REPLACE(lower(COALESCE({}, '')), ' ', ''), '_', ''), '-', '') LIKE '%nopic%'"
+    query = f"""
+        SELECT a.id, a.asset_dir, a.hash_main_blake3, a.tags_json
+        FROM assets a
+        WHERE {no_pic_expr.format('a.tags_json')}
+           OR EXISTS (
+                SELECT 1
+                FROM asset_tags t
+                WHERE (t.asset_id = a.id OR t.hash_full_blake3 = a.hash_full_blake3)
+                  AND (
+                    {no_pic_expr.format('t.tags_original_json')}
+                    OR {no_pic_expr.format('t.tags_translated_json')}
+                  )
+           )
+        ORDER BY a.id
+    """
+    rows = fetch_all(conn, query)
+    for row in rows:
+        scanned += 1
+        if not _asset_has_hash_preview(row.get("asset_dir") or "", row.get("hash_main_blake3") or ""):
+            continue
+
+        asset_tags = _load_tags(row.get("tags_json"))
+        cleaned_asset_tags = _strip_no_pic_tags(asset_tags)
+        if cleaned_asset_tags != asset_tags:
+            conn.execute(
+                "UPDATE assets SET tags_json = ? WHERE id = ?",
+                (json.dumps(cleaned_asset_tags), row["id"]),
+            )
+            updated_assets += 1
+
+        tag_rows = fetch_all(
+            conn,
+            "SELECT id, tags_original_json, tags_translated_json FROM asset_tags "
+            "WHERE asset_id = ? OR hash_full_blake3 = ?",
+            (row["id"], row.get("hash_main_blake3") or ""),
+        )
+        for tag_row in tag_rows:
+            original_tags = _load_tags(tag_row.get("tags_original_json"))
+            translated_tags = _load_tags(tag_row.get("tags_translated_json"))
+            cleaned_original = _strip_no_pic_tags(original_tags)
+            cleaned_translated = _strip_no_pic_tags(translated_tags)
+            if cleaned_original != original_tags or cleaned_translated != translated_tags:
+                conn.execute(
+                    "UPDATE asset_tags SET tags_original_json = ?, tags_translated_json = ? WHERE id = ?",
+                    (json.dumps(cleaned_original), json.dumps(cleaned_translated), tag_row["id"]),
+                )
+                updated_tag_rows += 1
+
+    _db_retry(lambda: conn.commit())
+    conn.close()
+    return {"scanned": scanned, "updated_assets": updated_assets, "updated_tag_rows": updated_tag_rows}
 
 
 def _import_archived_batch_outputs_on_startup(settings: Dict[str, str]) -> Dict[str, int]:
@@ -478,21 +552,6 @@ def _retry_http(fn, attempts: int = 5, delay: float = 2.0):
                 raise
             time.sleep(delay * (i + 1))
 
-def _flush_embedding_batch(batch: List[tuple]) -> None:
-    if not batch:
-        return
-    def _write():
-        conn = get_db()
-        conn.execute("BEGIN")
-        conn.executemany(
-            "UPDATE assets SET embedding_json = ? WHERE id = ?",
-            batch,
-        )
-        conn.commit()
-        conn.close()
-    _db_retry(_write)
-
-
 def _upsert_asset_tags_bulk(conn, rows: List[Dict[str, Any]]) -> None:
     if not rows:
         return
@@ -638,21 +697,13 @@ def _flush_tag_batch(
         conn = get_db()
         conn.execute("BEGIN")
         rows = []
-        embed_rows = []
         for item in batch:
             merged_tags = _merge_tags_for_asset(item["tags"], item.get("translated_tags") or [])
             rows.append((json.dumps(merged_tags), item["id"]))
-            if item.get("embedding") is not None:
-                embed_rows.append((json.dumps(item["embedding"]), item["id"]))
         conn.executemany(
             "UPDATE assets SET tags_json = ? WHERE id = ?",
             rows,
         )
-        if embed_rows:
-            conn.executemany(
-                "UPDATE assets SET embedding_json = ? WHERE id = ?",
-                embed_rows,
-            )
         now = now_iso()
         tag_language = settings.get("tag_language") or ""
         tag_rows: List[Dict[str, Any]] = []
@@ -1217,7 +1268,6 @@ def _apply_batch_output_for_flow(
                     "id": row["id"],
                     "tags": _normalize_tags(existing_tags + translated),
                     "translated_tags": _normalize_tags(existing_translated + translated),
-                    "embedding": None,
                     "hash_main": row.get("hash_main_blake3") or "",
                     "hash_full": row.get("hash_full_blake3") or "",
                     "created_at": row.get("created_at") or now_iso(),
@@ -1243,7 +1293,6 @@ def _apply_batch_output_for_flow(
                     "id": row["id"],
                     "tags": _normalize_tags(existing_tags + translated),
                     "translated_tags": _normalize_tags(existing_translated + translated),
-                    "embedding": None,
                     "hash_main": row.get("hash_main_blake3") or "",
                     "hash_full": row.get("hash_full_blake3") or "",
                     "created_at": row.get("created_at") or now_iso(),
@@ -1271,7 +1320,6 @@ def _apply_batch_output_for_flow(
                     "id": row["id"],
                     "tags": tags,
                     "translated_tags": translated_tags,
-                    "embedding": None,
                     "hash_main": row.get("hash_main_blake3") or "",
                     "hash_full": row.get("hash_full_blake3") or "",
                     "created_at": row.get("created_at") or now_iso(),
@@ -1684,28 +1732,7 @@ def _task_worker() -> None:
         kind = row.get("kind") or ""
         target_id = row.get("target_id")
         try:
-            if kind == "embeddings_all":
-                _regenerate_embeddings(None, task_id=task_id)
-                _task_update(task_id, status="done", finished_at=now_iso())
-            elif kind == "embeddings_all_deferred":
-                job_path = _write_startup_job(
-                    "embeddings_all",
-                    {"requested_at": now_iso(), "task_id": int(task_id)},
-                )
-                _set_embed_progress("all", {"status": "queued_restart", "done": 0, "total": 0, "errors": 0})
-                _task_progress(
-                    task_id,
-                    "done",
-                    1,
-                    1,
-                    0,
-                    message=f"Scheduled for next restart ({job_path})",
-                )
-                _task_update(task_id, status="done", finished_at=now_iso(), message=f"Deferred to startup: {job_path}")
-            elif kind == "embeddings_project":
-                _regenerate_embeddings(int(target_id) if target_id is not None else None, task_id=task_id)
-                _task_update(task_id, status="done", finished_at=now_iso())
-            elif kind == "tag_project_missing":
+            if kind == "tag_project_missing":
                 _tag_project_assets(int(target_id), "missing", task_id=task_id)
                 _task_finish_done_or_canceled(task_id)
             elif kind == "tag_project_retag":
@@ -1934,6 +1961,7 @@ class ProjectCreate(BaseModel):
     description: Optional[str] = None
     category_name: Optional[str] = None
     is_ai_generated: Optional[bool] = None
+    project_root: Optional[str] = None
     source_path: Optional[str] = None
     source_folder: Optional[str] = None
     full_project_copy: Optional[bool] = None
@@ -1949,6 +1977,7 @@ class ProjectUpdate(BaseModel):
     description: Optional[str] = None
     category_name: Optional[str] = None
     is_ai_generated: Optional[bool] = None
+    project_root: Optional[str] = None
     source_path: Optional[str] = None
     source_folder: Optional[str] = None
     full_project_copy: Optional[bool] = None
@@ -1956,6 +1985,7 @@ class ProjectUpdate(BaseModel):
 
 
 class ProjectReimport(BaseModel):
+    project_root: Optional[str] = None
     source_path: Optional[str] = None
     source_folder: Optional[str] = None
     full_project_copy: Optional[bool] = None
@@ -1963,6 +1993,7 @@ class ProjectReimport(BaseModel):
 
 class ProjectExportCmd(BaseModel):
     game_path: Optional[str] = None
+    skip_preview_images: Optional[bool] = None
 
 
 class MissingContentFilesPayload(BaseModel):
@@ -2002,6 +2033,7 @@ class SettingsUpdate(BaseModel):
     export_anim_sequence_image_count: Optional[int] = None
     export_capture360_discard_frames: Optional[int] = None
     export_upload_after_export: Optional[bool] = None
+    export_skip_preview_images: Optional[bool] = None
     server_mode_enabled: Optional[bool] = None
     export_resolve_deep_roots: Optional[str] = None
     export_upload_path_template: Optional[str] = None
@@ -2035,7 +2067,6 @@ class SettingsUpdate(BaseModel):
     setcard_single_image_only: Optional[bool] = None
     setcard_include_types: Optional[str] = None
     setcard_exclude_types: Optional[str] = None
-    generate_embeddings_on_import: Optional[bool] = None
     default_full_project_copy: Optional[bool] = None
     sidebar_width: Optional[int] = None
     purge_assets_on_startup: Optional[bool] = None
@@ -2058,6 +2089,48 @@ class AssetMigrateRequest(BaseModel):
 
 def now_iso() -> str:
     return datetime.utcnow().isoformat()
+
+
+def _normalize_optional_path_value(value: Optional[Any]) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _project_root_from_row(row: Dict[str, Any]) -> str:
+    return _normalize_optional_path_value(row.get("project_root") or row.get("source_path")) or ""
+
+
+def _project_root_lookup_key(source_path: Optional[str], source_folder: Optional[str] = None) -> str:
+    resolved = _resolve_source_paths(source_path, source_folder)
+    project_root = resolved.get("project_root")
+    if project_root:
+        return _normalize_path_value(str(project_root))
+    return _normalize_path_value(source_path)
+
+
+def _find_project_by_root(
+    conn,
+    source_path: Optional[str],
+    source_folder: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    root_key = _project_root_lookup_key(source_path, source_folder)
+    if not root_key:
+        return None
+    rows = fetch_all(conn, "SELECT * FROM projects")
+    if not rows:
+        return None
+    for row in rows:
+        row_values = {
+            _normalize_path_value(row.get("source_path")),
+            _normalize_source_root_value(row.get("source_path")),
+            _normalize_path_value(row.get("folder_path")),
+            _normalize_source_root_value(row.get("folder_path")),
+        }
+        if root_key in row_values:
+            return row
+    return None
 
 
 def _build_image_data_url(image_path: Path, size: int, quality: int) -> str:
@@ -2544,13 +2617,11 @@ def _run_batch_tagging(
                                 progress_hook(1, 1, None)
                             continue
                         translated_tags = _translate_tags_if_enabled(settings, tags)
-                        embedding = None
                         batch_rows.append(
                             {
                                 "id": row["id"],
                                 "tags": tags,
                                 "translated_tags": translated_tags,
-                                "embedding": embedding,
                                 "hash_main": row.get("hash_main_blake3") or "",
                                 "hash_full": row.get("hash_full_blake3") or "",
                                 "created_at": row.get("created_at") or now_iso(),
@@ -3015,7 +3086,6 @@ def _run_batch_translate_names(
                             "id": row["id"],
                             "tags": merged_tags,
                             "translated_tags": merged_translated,
-                            "embedding": None,
                             "hash_main": row.get("hash_main_blake3") or "",
                             "hash_full": row.get("hash_full_blake3") or "",
                             "created_at": row.get("created_at") or now_iso(),
@@ -3189,8 +3259,6 @@ def _pick_asset_image_fallback(asset_dir: str) -> Optional[Path]:
         if matches:
             return matches[0]
     return None
-
-
 
 
 def _generate_project_setcard(project: Dict[str, Any], settings: Dict[str, Any]) -> List[str]:
@@ -3470,12 +3538,10 @@ def _translate_name_tags(
             logger.info("Name->tags LLM result: name=%s tags=%s", base_name, translated)
             merged_tags = _normalize_tags(existing_tags + translated)
             merged_translated = _normalize_tags(existing_translated + translated)
-            embedding = None
             batch.append({
                 "id": row["id"],
                 "tags": merged_tags,
                 "translated_tags": merged_translated,
-                "embedding": embedding,
                 "hash_main": row.get("hash_main_blake3") or "",
                 "hash_full": row.get("hash_full_blake3") or "",
                 "created_at": row.get("created_at") or now_iso(),
@@ -3550,7 +3616,6 @@ def _name_tags_simple(
                 "id": row["id"],
                 "tags": merged_tags,
                 "translated_tags": existing_translated,
-                "embedding": None,
                 "hash_main": row.get("hash_main_blake3") or "",
                 "hash_full": row.get("hash_full_blake3") or "",
                 "created_at": row.get("created_at") or now_iso(),
@@ -3889,7 +3954,6 @@ def _run_batch_translate_tags(
                             "id": row["id"],
                             "tags": merged_tags,
                             "translated_tags": merged_translated,
-                            "embedding": None,
                             "hash_main": row.get("hash_main_blake3") or "",
                             "hash_full": row.get("hash_full_blake3") or "",
                             "created_at": row.get("created_at") or now_iso(),
@@ -4006,7 +4070,6 @@ def _translate_tags_only(
                 "id": row["id"],
                 "tags": merged_tags,
                 "translated_tags": merged_translated,
-                "embedding": None,
                 "hash_main": row.get("hash_main_blake3") or "",
                 "hash_full": row.get("hash_full_blake3") or "",
                 "created_at": row.get("created_at") or now_iso(),
@@ -4304,15 +4367,10 @@ def _tag_project_assets(
             tags = _normalize_tags(tags)
             _maybe_set_project_era(project_id, era)
             translated_tags = _translate_tags_if_enabled(settings, tags)
-            embedding = None
-            if _should_generate_embeddings_on_import(settings):
-                embedding_text = _build_embedding_text(row["name"], row["description"] or "", tags, translated_tags)
-                embedding = embed_text(embedding_text)
             batch.append({
                 "id": row["id"],
                 "tags": tags,
                 "translated_tags": translated_tags,
-                "embedding": embedding,
                 "hash_main": row.get("hash_main_blake3") or "",
                 "hash_full": row.get("hash_full_blake3") or "",
                 "created_at": row.get("created_at") or now_iso(),
@@ -4831,6 +4889,49 @@ def _prefer_import_uproject(root: Path) -> Path:
     return root / "import.uproject"
 
 
+def _ensure_project_render_defaults(project_root: Path) -> bool:
+    config_path = project_root / "Config" / "DefaultEngine.ini"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    lines = existing.splitlines()
+
+    def ensure_line(section: str, entry: str) -> bool:
+        section_header = f"[{section}]"
+        section_start = -1
+        for idx, line in enumerate(lines):
+            if line.strip() == section_header:
+                section_start = idx
+                break
+        entry_key = entry.split("=", 1)[0].lstrip("+").strip()
+        entry_pattern = re.compile(rf"^\+?{re.escape(entry_key)}\s*=")
+
+        if section_start == -1:
+            if lines and lines[-1].strip():
+                lines.append("")
+            lines.append(section_header)
+            lines.append(entry)
+            return True
+
+        section_end = len(lines)
+        for idx in range(section_start + 1, len(lines)):
+            if lines[idx].startswith("[") and lines[idx].endswith("]"):
+                section_end = idx
+                break
+        for idx in range(section_start + 1, section_end):
+            if entry_pattern.match(lines[idx].strip()):
+                return False
+        lines.insert(section_end, entry)
+        return True
+
+    changed = False
+    changed |= ensure_line("/Script/WindowsTargetPlatform.WindowsTargetSettings", "DefaultGraphicsRHI=DefaultGraphicsRHI_DX12")
+    changed |= ensure_line("/Script/WindowsTargetPlatform.WindowsTargetSettings", "+D3D12TargetedShaderFormats=PCD3D_SM6")
+    changed |= ensure_line("/Script/Engine.RendererSettings", "r.Shadow.Virtual.Enable=1")
+    if changed or not config_path.exists():
+        config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return changed
+
+
 def get_settings(conn) -> Dict[str, str]:
     rows = fetch_all(conn, "SELECT key, value FROM settings")
     return {row["key"]: row["value"] for row in rows}
@@ -4849,13 +4950,6 @@ def _normalized_batch_size(value: Any, default: int = 500, upper: int = 50000) -
     if parsed < 1:
         return default
     return min(parsed, upper)
-
-
-def _should_generate_embeddings_on_import(settings: Dict[str, str]) -> bool:
-    raw = settings.get("generate_embeddings_on_import")
-    if raw is None or str(raw).strip() == "":
-        return False
-    return _bool_from_setting(raw)
 
 
 def _dir_size_bytes(path: Optional[str]) -> int:
@@ -4896,11 +4990,11 @@ def _normalize_source_preference(value: Optional[str], default: str = "external"
 
 
 def _resolve_source_content_path(row: Dict[str, Any]) -> Optional[Path]:
-    source_path = (row.get("source_path") or "").strip()
-    if not source_path:
+    project_root = _project_root_from_row(row)
+    if not project_root:
         return None
     source_folder = (row.get("source_folder") or "").strip()
-    base = _resolve_fs_path(source_path) or Path(source_path)
+    base = _resolve_fs_path(project_root) or Path(project_root)
     if source_folder:
         folder_path = _resolve_fs_path(source_folder) or Path(source_folder)
         if folder_path.is_absolute():
@@ -4910,14 +5004,14 @@ def _resolve_source_content_path(row: Dict[str, Any]) -> Optional[Path]:
 
 
 def _resolve_source_content_base_path(row: Dict[str, Any]) -> Optional[Path]:
-    resolved = _resolve_source_paths(row.get("source_path"), row.get("source_folder"))
+    resolved = _resolve_source_paths(_project_root_from_row(row), row.get("source_folder"))
     project_root = resolved.get("project_root")
     if project_root:
         return project_root / "Content"
-    source_path = (row.get("source_path") or "").strip()
-    if not source_path:
+    project_root_value = _project_root_from_row(row)
+    if not project_root_value:
         return None
-    base = _resolve_fs_path(source_path) or Path(source_path)
+    base = _resolve_fs_path(project_root_value) or Path(project_root_value)
     if base.name.lower() == "content":
         return base
     return base / "Content"
@@ -5096,6 +5190,45 @@ def _normalize_tags(tags: List[str]) -> List[str]:
     return cleaned
 
 
+def _strip_no_pic_tags(tags: List[str]) -> List[str]:
+    cleaned = []
+    for tag in tags:
+        value = str(tag).strip()
+        if not value:
+            continue
+        key = re.sub(r"[\s_-]+", "", value.lower())
+        if key == "nopic":
+            continue
+        if value not in cleaned:
+            cleaned.append(value)
+    return cleaned
+
+
+def _asset_has_hash_preview(asset_dir: str, hash_main: str) -> bool:
+    candidates: List[Path] = []
+    normalized_dir = str(asset_dir or "").strip().replace("\\", "/")
+    if normalized_dir:
+        candidates.append(ASSETS_DIR / normalized_dir)
+    if hash_main:
+        candidates.append(ASSETS_DIR / hash_main[:3] / hash_main)
+
+    seen = set()
+    for asset_root in candidates:
+        key = str(asset_root)
+        if key in seen:
+            continue
+        seen.add(key)
+        if not asset_root.exists() or not hash_main:
+            continue
+        for suffix in ("_t.webp", "_d.webp", "_f.webp", "_ta.webp", "_da.webp"):
+            if (asset_root / f"{hash_main}{suffix}").exists():
+                return True
+        for match in asset_root.glob(f"{hash_main}*.webp"):
+            if match.is_file():
+                return True
+    return False
+
+
 def _merge_tags_for_asset(tags: List[str], translated_tags: List[str]) -> List[str]:
     if not translated_tags:
         return tags
@@ -5114,18 +5247,6 @@ def _translate_tags_if_enabled(settings: Dict[str, str], tags: List[str]) -> Lis
     except Exception as exc:
         logger.error("Tag translation failed: %s", exc)
         return []
-
-
-def _build_embedding_text(
-    name: str,
-    description: str,
-    tags: List[str],
-    translated_tags: List[str],
-) -> str:
-    parts = [name or "", description or "", " ".join(tags)]
-    if translated_tags:
-        parts.append(" ".join(translated_tags))
-    return " ".join([p for p in parts if p])
 
 
 def _tokenize_search_text(value: str) -> List[str]:
@@ -5152,6 +5273,23 @@ def _normalize_path_value(value: Optional[str]) -> str:
         return str(resolved).replace("\\", "/").lower()
     except Exception:
         return normalized_raw.lower()
+
+
+def _normalize_source_root_value(value: Optional[str]) -> str:
+    normalized = _normalize_path_value(value)
+    if not normalized:
+        return ""
+    raw = normalized.replace("\\", "/").strip()
+    parts = [p for p in raw.strip("/").split("/") if p]
+    if not parts:
+        return raw
+    lower_parts = [p.lower() for p in parts]
+    if "content" in lower_parts:
+        idx = lower_parts.index("content")
+        if idx <= 0:
+            return ""
+        return "/" + "/".join(parts[:idx]).strip("/")
+    return raw
 
 
 def _resolve_fs_path(path_value: Optional[str]) -> Optional[Path]:
@@ -5238,6 +5376,7 @@ def _project_row_to_dict(row: Dict[str, Any]) -> Dict[str, Any]:
         "screenshot_url": screenshot_url,
         "art_style": row.get("art_style") or "",
         "tags": json.loads(row.get("tags_json") or "[]"),
+        "project_root": _project_root_from_row(row),
         "source_path": row.get("source_path") or "",
         "source_folder": (Path(row.get("source_folder")).name if row.get("source_folder") else ""),
         "source_preference": _normalize_source_preference(row.get("source_preference"), "external"),
@@ -5253,108 +5392,7 @@ def _find_project_by_source(
     source_folder: Optional[str],
     deep_root_names: Optional[set[str]] = None,
 ) -> Optional[Dict[str, Any]]:
-    inferred_top = ""
-    inferred_pack = ""
-    is_game_virtual_path = False
-    deep_source_candidate: Optional[Path] = None
-    if source_path:
-        try:
-            raw_source = str(source_path).replace("\\", "/").strip()
-            game_parts = [p for p in raw_source.strip("/").split("/") if p]
-            if game_parts and game_parts[0].lower() == "game":
-                is_game_virtual_path = True
-                if len(game_parts) >= 2:
-                    inferred_top = str(game_parts[1]).strip().lower()
-                if len(game_parts) >= 3:
-                    pack = str(game_parts[2]).strip().lower()
-                    if pack and not _is_generic_pack_folder_name(pack):
-                        inferred_pack = pack
-            else:
-                s = _resolve_fs_path(source_path) or Path(source_path).expanduser()
-                parts = list(s.parts)
-                lower_parts = [p.lower() for p in parts]
-                if "content" in lower_parts:
-                    idx = lower_parts.index("content")
-                    if idx + 1 < len(parts):
-                        inferred_top = str(parts[idx + 1]).strip().lower()
-                    if idx + 2 < len(parts):
-                        pack = str(parts[idx + 2]).strip().lower()
-                        if pack and not _is_generic_pack_folder_name(pack):
-                            inferred_pack = pack
-                    if idx + 2 < len(parts):
-                        deep_source_candidate = Path(*parts[: idx + 3])
-        except Exception:
-            inferred_top = ""
-            inferred_pack = ""
-            deep_source_candidate = None
-    if source_folder:
-        cleaned = re.split(r"[\/]+", source_folder.strip().strip("/\\"))
-        source_folder = cleaned[-1] if cleaned else source_folder
-    resolved = _resolve_source_paths(source_path, source_folder)
-    include_project_root = False
-    resolved_source = None
-    try:
-        resolved_source = _resolve_fs_path(source_path) if source_path else None
-    except Exception:
-        resolved_source = None
-    if resolved_source:
-        if (resolved_source / "Content").is_dir() or resolved_source.name.lower() == "content":
-            include_project_root = True
-    use_deep = bool(inferred_top and inferred_pack and deep_root_names and inferred_top in deep_root_names)
-    candidates = [source_path]
-    if use_deep and deep_source_candidate is not None:
-        candidates.append(deep_source_candidate)
-    else:
-        candidates.append(resolved.get("source_folder"))
-    if source_folder and not is_game_virtual_path:
-        candidates.append(source_folder)
-    if include_project_root:
-        candidates.append(resolved.get("project_root"))
-    normalized = {val for val in (_normalize_path_value(c) for c in candidates) if val}
-    rows = fetch_all(conn, "SELECT * FROM projects")
-    if not rows:
-        return None
-
-    # 1) Exact path-based match first.
-    for row in rows:
-        folder_path = row.get("folder_path") or ""
-        row_source_folder = str(row.get("source_folder") or "").strip()
-        row_source_folder_name = Path(row_source_folder).name.strip().lower() if row_source_folder else ""
-        row_values = [
-            _normalize_path_value(row.get("source_path")),
-            _normalize_path_value(folder_path),
-            _normalize_path_value(str(Path(folder_path) / "Content")) if folder_path else "",
-            _normalize_path_value(str(Path(folder_path) / "Content" / row_source_folder_name)) if folder_path and row_source_folder_name else "",
-        ]
-        if not is_game_virtual_path:
-            row_values.append(_normalize_path_value(row.get("source_folder")))
-        if any(val and val in normalized for val in row_values):
-            return row
-
-    # 2) If configured: for listed top roots, prefer /Content/<Top>/<Pack>/... -> <Pack>.
-    if use_deep:
-        pack_matches = []
-        for row in rows:
-            row_source_folder = str(row.get("source_folder") or "").strip()
-            row_source_folder_name = Path(row_source_folder).name.strip().lower() if row_source_folder else ""
-            if row_source_folder_name and row_source_folder_name == inferred_pack:
-                pack_matches.append(row)
-        if len(pack_matches) == 1:
-            return pack_matches[0]
-
-    # 3) Fallback to /Content/<Top>/... only if unique to avoid wrong routing.
-    # If deep-root mode is active and a pack was inferred, do NOT fallback to top-level.
-    if inferred_top and not (use_deep and inferred_pack):
-        top_matches = []
-        for row in rows:
-            row_source_folder = str(row.get("source_folder") or "").strip()
-            row_source_folder_name = Path(row_source_folder).name.strip().lower() if row_source_folder else ""
-            if row_source_folder_name and row_source_folder_name == inferred_top:
-                top_matches.append(row)
-        if len(top_matches) == 1:
-            return top_matches[0]
-
-    return None
+    return _find_project_by_root(conn, source_path, source_folder)
 
 
 def _create_project_from_root(root_name: str) -> int:
@@ -5362,11 +5400,7 @@ def _create_project_from_root(root_name: str) -> int:
 
     name = root_name.strip() or "project"
     conn = get_db()
-    existing = fetch_one(
-        conn,
-        "SELECT id FROM projects WHERE lower(source_folder) = lower(?)",
-        (name,),
-    )
+    existing = _find_project_by_root(conn, name, None)
     if existing:
         logger.info("Auto-create project: existing match id=%s for root=%s", existing["id"], name)
         conn.close()
@@ -5401,8 +5435,8 @@ def _create_project_from_root(root_name: str) -> int:
             None,
             None,
             now_iso(),
-            None,
             name,
+            None,
             0,
             "external",
         ),
@@ -5414,190 +5448,71 @@ def _create_project_from_root(root_name: str) -> int:
     return project_id
 
 
+def _infer_source_folder_from_project_root(project_root: Path, deep_root_names: Optional[set[str]] = None) -> Optional[str]:
+    deep_root_names = deep_root_names or set()
+    content_root = project_root / "Content"
+    if not content_root.exists() or not content_root.is_dir():
+        return None
+    ignore_names = {"collections", "developers", "dev", "saved", "export", "exports"}
+    subdirs = [
+        d
+        for d in content_root.iterdir()
+        if d.is_dir() and d.name.strip().lower() not in ignore_names
+    ]
+    if not subdirs:
+        subdirs = [d for d in content_root.iterdir() if d.is_dir()]
+    if not subdirs:
+        return None
+    if len(subdirs) == 1:
+        return subdirs[0].name
+
+    largest = max(subdirs, key=lambda p: sum(1 for item in p.rglob("*") if item.is_file()))
+    if largest.name.strip().lower() in deep_root_names:
+        nested = [d for d in largest.iterdir() if d.is_dir()]
+        if len(nested) == 1:
+            return f"{largest.name}/{nested[0].name}"
+        if len(nested) > 1:
+            chosen = max(nested, key=lambda p: sum(1 for item in p.rglob("*") if item.is_file()))
+            return f"{largest.name}/{chosen.name}"
+    return largest.name
+
+
 def _resolve_project_id_from_meta(conn, meta: Dict[str, Any]) -> Optional[int]:
     vendor = str(meta.get("vendor") or "").strip()
     package = str(meta.get("package") or "")
+    source_root_path = str(meta.get("source_root_path") or meta.get("source_path") or meta.get("resolve_source_path") or "").strip()
 
-    root = ""
-    if vendor:
-        root = vendor
-    elif package.startswith("/Game/"):
+    root_candidate = source_root_path
+    if not root_candidate and package.startswith("/Game/"):
         relative = package[6:]
-        root = relative.split("/", 1)[0].strip()
+        root_candidate = relative.split("/", 1)[0].strip()
+    if not root_candidate and vendor:
+        root_candidate = vendor
 
-    if not root:
+    if not root_candidate:
         return None
 
-    root_lc = root.lower()
-    root_key = slugify(root_lc)
-    rows = fetch_all(conn, "SELECT id, name, source_path, source_folder FROM projects")
-    debug_samples = []
+    lookup_key = _project_root_lookup_key(root_candidate, None)
+    rows = fetch_all(conn, "SELECT id, source_path, folder_path FROM projects")
     for row in rows:
-        name_raw = (row.get("name") or "").strip().lower()
-        name_key = slugify(name_raw)
-        name_match = name_raw == root_lc or (name_key and name_key == root_key)
-        source_path = row.get("source_path") or ""
-        source_folder = row.get("source_folder") or ""
-        source_leaf = Path(source_path).name.lower() if source_path else ""
-        folder_leaf = Path(source_folder).name.lower() if source_folder else ""
-        debug_samples.append({
-            "id": row.get("id"),
-            "name": name_raw,
-            "name_key": name_key,
-            "source_leaf": source_leaf,
-            "folder_leaf": folder_leaf,
-        })
-        source_key = slugify(source_leaf) if source_leaf else ""
-        folder_key = slugify(folder_leaf) if folder_leaf else ""
-        if (
-            name_match
-            or source_leaf == root_lc
-            or folder_leaf == root_lc
-            or source_key == root_key
-            or folder_key == root_key
-        ):
+        row_values = {
+            _normalize_path_value(row.get("source_path")),
+            _normalize_source_root_value(row.get("source_path")),
+            _normalize_path_value(row.get("folder_path")),
+            _normalize_source_root_value(row.get("folder_path")),
+        }
+        if lookup_key in row_values:
             return row.get("id")
-    logger.warning("Resolve project failed for root=%s key=%s samples=%s", root_lc, root_key, debug_samples[:5])
+    logger.warning("Resolve project failed for root=%s key=%s", root_candidate, lookup_key)
     return None
 
 
 
-def _regenerate_embeddings(project_id: Optional[int], task_id: Optional[int] = None) -> None:
-    key = "all" if project_id is None else str(project_id)
+def _disabled_rebuild_task(project_id: Optional[int], task_id: Optional[int] = None) -> None:
     scope_label = "all" if project_id is None else f"project={project_id}"
-    conn = get_db()
-    params: List[Any] = []
-    where = ""
-    if project_id is not None:
-        where = "WHERE a.project_id = ?"
-        params.append(project_id)
-    rows = fetch_all(
-        conn,
-        "SELECT a.id, a.name, a.description, a.tags_json, a.hash_full_blake3, t.tags_translated_json "
-        "FROM assets a LEFT JOIN asset_tags t ON t.hash_full_blake3 = a.hash_full_blake3 "
-        f"{where}",
-        params,
-    )
-    total = len(rows)
-    started_at = time.perf_counter()
-    startup_log_step = 500
-    last_startup_log_done = 0
-    _set_embed_progress(key, {"status": "running", "total": total, "done": 0, "errors": 0})
-    if task_id is None:
-        logger.info("Embeddings rebuild start: total=%s scope=%s", total, scope_label)
+    logger.info("Rebuild task disabled; skipping requested rebuild scope=%s", scope_label)
     if task_id is not None:
-        _task_progress(task_id, "running", total, 0, 0)
-    done = 0
-    errors = 0
-    write_batch: List[tuple] = []
-    write_batch_size = 5000
-    embed_batch_ids: List[int] = []
-    embed_batch_texts: List[str] = []
-    embed_batch_size = 1024
-
-    def _emit_progress() -> None:
-        nonlocal last_startup_log_done
-        _set_embed_progress(key, {"status": "running", "total": total, "done": done, "errors": errors})
-        if task_id is not None:
-            _task_progress(task_id, "running", total, done, errors)
-            return
-        should_log = done == total or (done - last_startup_log_done) >= startup_log_step
-        if not should_log:
-            return
-        elapsed = max(0.0001, time.perf_counter() - started_at)
-        rate = done / elapsed if elapsed > 0 else 0.0
-        remaining = max(0, total - done)
-        eta_seconds = (remaining / rate) if rate > 0 else 0.0
-        logger.info(
-            "Embeddings rebuild progress: %s/%s errors=%s scope=%s elapsed=%s rate=%.1f rows/s eta=%s",
-            done,
-            total,
-            errors,
-            scope_label,
-            _fmt_seconds(elapsed),
-            rate,
-            _fmt_seconds(eta_seconds),
-        )
-        last_startup_log_done = done
-
-    def _flush_write_batch() -> None:
-        nonlocal write_batch
-        if write_batch:
-            _flush_embedding_batch(write_batch)
-            write_batch = []
-
-    def _consume_embed_batch() -> None:
-        nonlocal done, errors, write_batch, embed_batch_ids, embed_batch_texts
-        if not embed_batch_ids:
-            return
-        try:
-            vectors = embed_texts(embed_batch_texts)
-            if len(vectors) != len(embed_batch_ids):
-                raise RuntimeError(f"embed_texts size mismatch: {len(vectors)} != {len(embed_batch_ids)}")
-            for asset_id, embedding in zip(embed_batch_ids, vectors):
-                write_batch.append((json.dumps(embedding), asset_id))
-                done += 1
-                if len(write_batch) >= write_batch_size:
-                    _flush_write_batch()
-                if done % 50 == 0 or done == total:
-                    _emit_progress()
-        except Exception as exc:
-            logger.error("Embedding regen batch failed size=%s: %s", len(embed_batch_ids), exc)
-            for asset_id, embedding_text in zip(embed_batch_ids, embed_batch_texts):
-                try:
-                    embedding = embed_text(embedding_text)
-                    write_batch.append((json.dumps(embedding), asset_id))
-                    if len(write_batch) >= write_batch_size:
-                        _flush_write_batch()
-                except Exception as one_exc:
-                    errors += 1
-                    logger.error("Embedding regen failed for asset %s: %s", asset_id, one_exc)
-                done += 1
-                if done % 50 == 0 or done == total:
-                    _emit_progress()
-        finally:
-            embed_batch_ids = []
-            embed_batch_texts = []
-
-    for row in rows:
-        if task_id is not None and _task_cancelled(task_id):
-            _set_embed_progress(key, {"status": "canceled", "total": total, "done": done, "errors": errors})
-            _task_progress(task_id, "canceled", total, done, errors)
-            conn.close()
-            return
-        try:
-            tags = json.loads(row.get("tags_json") or "[]")
-            translated = json.loads(row.get("tags_translated_json") or "[]")
-            embedding_text = _build_embedding_text(row["name"], row["description"] or "", tags, translated)
-            embed_batch_ids.append(int(row["id"]))
-            embed_batch_texts.append(embedding_text)
-            if len(embed_batch_ids) >= embed_batch_size:
-                _consume_embed_batch()
-        except Exception as exc:
-            errors += 1
-            done += 1
-            logger.error("Embedding regen prepare failed for asset %s: %s", row.get("id"), exc)
-            if done % 50 == 0 or done == total:
-                _emit_progress()
-
-    _consume_embed_batch()
-    _flush_write_batch()
-    conn.close()
-    _set_embed_progress(key, {"status": "done", "total": total, "done": done, "errors": errors})
-    if task_id is None:
-        elapsed = max(0.0001, time.perf_counter() - started_at)
-        rate = done / elapsed if elapsed > 0 else 0.0
-        logger.info(
-            "Embeddings rebuild done: %s/%s errors=%s scope=%s took=%s rate=%.1f rows/s",
-            done,
-            total,
-            errors,
-            scope_label,
-            _fmt_seconds(elapsed),
-            rate,
-        )
-    if task_id is not None:
-        _task_progress(task_id, "done", total, done, errors)
+        _task_progress(task_id, "done", 0, 0, 0)
 
 
 def _upsert_asset_tags(
@@ -5811,6 +5726,21 @@ def startup() -> None:
     startup_jobs_total = _count_startup_jobs()
     startup_total = _count_archived_batch_files()
     startup_work_total = int(startup_jobs_total + startup_total)
+    repair_no_pic_on_startup = _bool_from_setting(os.getenv("ASSET_NO_PIC_REPAIR_ON_STARTUP"))
+    if repair_no_pic_on_startup and startup_work_total > 0:
+        logger.warning("Startup no_pic repair skipped because startup import jobs are queued")
+        repair_no_pic_on_startup = False
+    if repair_no_pic_on_startup:
+        try:
+            result = _repair_no_pic_tags_on_startup()
+            logger.info(
+                "Startup no_pic repair: scanned=%s updated_assets=%s updated_tag_rows=%s",
+                result.get("scanned", 0),
+                result.get("updated_assets", 0),
+                result.get("updated_tag_rows", 0),
+            )
+        except Exception as exc:
+            logger.warning("Startup no_pic repair failed: %s", exc)
     if startup_work_total <= 0:
         _startup_import_set(
             running=False,
@@ -5885,13 +5815,13 @@ def _delayed_process_exit(delay_seconds: float = 0.8) -> None:
 
 def _restart_command() -> List[str]:
     # Optional explicit override, e.g.:
-    # ASSET_RESTART_CMD='python -m uvicorn main:app --host 0.0.0.0 --port 8008 --log-level info'
+    # ASSET_RESTART_CMD='python -m uvicorn main:app --host 0.0.0.0 --port 7985 --log-level info'
     raw_cmd = (os.getenv("ASSET_RESTART_CMD") or "").strip()
     if raw_cmd:
         return shlex.split(raw_cmd, posix=(os.name != "nt"))
 
     host = (os.getenv("ASSET_SERVER_HOST") or "127.0.0.1").strip() or "127.0.0.1"
-    port = (os.getenv("ASSET_SERVER_PORT") or "8008").strip() or "8008"
+    port = (os.getenv("ASSET_SERVER_PORT") or "7985").strip() or "7985"
     log_level = (os.getenv("ASSET_SERVER_LOG_LEVEL") or "info").strip() or "info"
     reload_flag = (os.getenv("ASSET_SERVER_RELOAD") or "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -5989,14 +5919,19 @@ def ui_fallback(full_path: str):
 def create_project(payload: ProjectCreate) -> Dict[str, Any]:
     if not payload.name.strip():
         raise HTTPException(status_code=400, detail="Project name is required")
-    if not (payload.source_path or "").strip():
-        raise HTTPException(status_code=400, detail="Source content path is required")
+    project_root_value = _normalize_optional_path_value(payload.project_root if payload.project_root is not None else payload.source_path)
+    if not project_root_value:
+        raise HTTPException(status_code=400, detail="Project root is required")
     if not (payload.source_folder or "").strip():
         raise HTTPException(status_code=400, detail="Source pack folder is required")
 
-    source_path_value = (payload.source_path or "").strip()
+    resolved_sources = _resolve_source_paths(project_root_value, payload.source_folder)
+    source_project_root = resolved_sources.get("project_root")
+    source_folder_path = resolved_sources.get("source_folder")
+    lookup_root = _normalize_optional_path_value(str(source_project_root) if source_project_root else project_root_value)
+
     conn = get_db()
-    existing = _find_project_by_source(conn, source_path_value, payload.source_folder)
+    existing = _find_project_by_root(conn, lookup_root, None)
     if existing:
         conn.close()
         return _project_row_to_dict(existing)
@@ -6006,17 +5941,14 @@ def create_project(payload: ProjectCreate) -> Dict[str, Any]:
     folder_path = PROJECTS_DIR / folder_name
     folder_path.mkdir(parents=True, exist_ok=True)
     (folder_path / "Content").mkdir(parents=True, exist_ok=True)
-    _ensure_uproject_file(payload.name.strip(), folder_path, payload.source_path)
+    _ensure_uproject_file(payload.name.strip(), folder_path, lookup_root)
 
-    resolved_sources = _resolve_source_paths(payload.source_path, payload.source_folder)
-    source_project_root = resolved_sources.get("project_root")
-    source_folder_path = resolved_sources.get("source_folder")
     full_copy = bool(payload.full_project_copy)
     if full_copy and source_project_root:
         source_folder_path = None
     screenshot_source = source_folder_path
-    if not screenshot_source and payload.source_path:
-        screenshot_source = Path(payload.source_path).expanduser()
+    if not screenshot_source and lookup_root:
+        screenshot_source = Path(lookup_root).expanduser()
     screenshot_path = _copy_local_project_screenshot(screenshot_source, folder_path)
 
     tags_json = json.dumps(payload.tags or [])
@@ -6044,7 +5976,7 @@ def create_project(payload: ProjectCreate) -> Dict[str, Any]:
             payload.category_name,
             1 if payload.is_ai_generated else 0 if payload.is_ai_generated is not None else None,
             now_iso(),
-            str(source_project_root) if source_project_root else (payload.source_path or None),
+            lookup_root,
             (Path(source_folder_path).name if source_folder_path else (payload.source_folder or None)),
             1 if full_copy else 0,
             source_pref,
@@ -6068,7 +6000,8 @@ def create_project(payload: ProjectCreate) -> Dict[str, Any]:
         "art_style": payload.art_style,
         "project_era": payload.project_era or "",
         "tags": payload.tags or [],
-        "source_path": str(source_project_root) if source_project_root else (payload.source_path or ""),
+        "project_root": lookup_root,
+        "source_path": lookup_root,
         "source_folder": (Path(source_folder_path).name if source_folder_path else (payload.source_folder or "")),
         "source_preference": source_pref,
         "created_at": now_iso(),
@@ -6115,7 +6048,8 @@ def list_projects(include_sizes: bool = False) -> List[Dict[str, Any]]:
                 "art_style": row["art_style"] or "",
                 "project_era": row.get("project_era") or "",
                 "tags": json.loads(row["tags_json"] or "[]"),
-                "source_path": row.get("source_path") or "",
+                "project_root": _project_root_from_row(row),
+                "source_path": _project_root_from_row(row),
                 "source_folder": row.get("source_folder") or "",
                 "source_preference": _normalize_source_preference(row.get("source_preference"), "external"),
                 "full_project_copy": bool(row.get("full_project_copy") or 0),
@@ -6161,14 +6095,15 @@ def notify_event(payload: UploadEventPayload) -> Dict[str, Any]:
 
 
 @app.get("/projects/resolve")
-def resolve_project(source_path: str, auto_create: bool = True) -> Dict[str, Any]:
-    if not source_path.strip():
-        raise HTTPException(status_code=400, detail="source_path is required")
-    target = _normalize_path_value(source_path)
+def resolve_project(project_root: Optional[str] = None, source_path: Optional[str] = None, auto_create: bool = True) -> Dict[str, Any]:
+    source_input = _normalize_optional_path_value(project_root if project_root is not None else source_path)
+    if not source_input:
+        raise HTTPException(status_code=400, detail="project_root or source_path is required")
+    target = _normalize_path_value(source_input)
     conn = get_db()
     settings = get_settings(conn)
     deep_root_names = _deep_roots_from_settings(settings)
-    existing = _find_project_by_source(conn, source_path, None, deep_root_names=deep_root_names)
+    existing = _find_project_by_root(conn, source_input, None)
     if existing:
         conn.close()
         return {"project_id": existing["id"]}
@@ -6177,19 +6112,18 @@ def resolve_project(source_path: str, auto_create: bool = True) -> Dict[str, Any
     for row in rows:
         candidates = [
             _normalize_path_value(row.get("source_path")),
-            _normalize_path_value(row.get("source_folder")),
             _normalize_path_value(row.get("folder_path")),
         ]
         if target in candidates:
             return {"project_id": row["id"]}
     if auto_create:
-        resolved = _resolve_source_paths(source_path, None)
+        resolved = _resolve_source_paths(source_input, None)
         project_root = resolved.get("project_root")
         source_folder_path = resolved.get("source_folder")
-        game_path_info = _parse_game_virtual_path(source_path, deep_root_names=deep_root_names)
-        inferred_source_folder = _infer_source_folder_from_path(source_path, deep_root_names=deep_root_names)
+        game_path_info = _parse_game_virtual_path(source_input, deep_root_names=deep_root_names)
+        inferred_source_folder = _infer_source_folder_from_path(source_input, deep_root_names=deep_root_names)
 
-        candidate_path = _resolve_fs_path(source_path) or Path(source_path).expanduser()
+        candidate_path = _resolve_fs_path(source_input) or Path(source_input).expanduser()
         if candidate_path.is_file():
             candidate_path = candidate_path.parent
         parts = list(candidate_path.parts)
@@ -6197,14 +6131,14 @@ def resolve_project(source_path: str, auto_create: bool = True) -> Dict[str, Any
         project_name = ""
         if game_path_info.get("project_name"):
             project_name = str(game_path_info.get("project_name") or "").strip()
-        elif inferred_source_folder:
-            project_name = Path(inferred_source_folder).name
         if "content" in lower_parts:
             idx = lower_parts.index("content")
-            if idx + 2 < len(parts) and inferred_source_folder and "/" in inferred_source_folder:
-                project_name = parts[idx + 2]
-            elif idx + 1 < len(parts):
-                project_name = parts[idx + 1]
+            if idx > 0:
+                project_name = parts[idx - 1]
+        elif candidate_path.name.lower() == "data" and candidate_path.parent:
+            project_name = candidate_path.parent.name or project_name
+        elif inferred_source_folder:
+            project_name = Path(inferred_source_folder).name
         if not project_name:
             if candidate_path.name.lower() == "content":
                 project_name = candidate_path.parent.name
@@ -6220,23 +6154,16 @@ def resolve_project(source_path: str, auto_create: bool = True) -> Dict[str, Any
             source_folder_name = str(inferred_source_folder).strip()
         elif source_folder_path:
             source_folder_name = Path(source_folder_path).name
+        elif source_input:
+            resolved_source = _resolve_fs_path(source_input) or Path(source_input).expanduser()
+            if resolved_source.exists() and (resolved_source / "Content").is_dir():
+                source_folder_name = _infer_source_folder_from_project_root(resolved_source, deep_root_names=deep_root_names) or ""
         conn = get_db()
-        if source_folder_name:
-            source_folder_leaf = Path(source_folder_name).name if source_folder_name else ""
-            existing = fetch_one(
-                conn,
-                "SELECT id FROM projects WHERE lower(source_folder) = lower(?) OR lower(source_folder) = lower(?)",
-                (source_folder_name, source_folder_leaf or source_folder_name),
-            )
-            if existing:
-                conn.close()
-                return {"project_id": existing["id"]}
-
         folder_name = f"{slugify(project_name)}-{int(time.time())}"
         folder_path = PROJECTS_DIR / folder_name
         folder_path.mkdir(parents=True, exist_ok=True)
         (folder_path / "Content").mkdir(parents=True, exist_ok=True)
-        _ensure_uproject_file(project_name, folder_path, source_path)
+        _ensure_uproject_file(project_name, folder_path, source_input)
 
         screenshot_source = source_folder_path or candidate_path
         screenshot_path = _copy_local_project_screenshot(screenshot_source, folder_path)
@@ -6259,7 +6186,7 @@ def resolve_project(source_path: str, auto_create: bool = True) -> Dict[str, Any
                 None,
                 json.dumps([]),
                 now_iso(),
-                str(project_root) if project_root else source_path,
+                str(project_root) if project_root else source_input,
                 source_folder_name or None,
                 0,
                 "external",
@@ -6289,6 +6216,7 @@ def export_projects() -> Response:
             "tags",
             "art_style",
             "project_era",
+            "project_root",
             "source_path",
             "source_folder",
             "full_project_copy",
@@ -6308,6 +6236,7 @@ def export_projects() -> Response:
                 ",".join(tags),
                 row.get("art_style") or "",
                 row.get("project_era") or "",
+                row.get("source_path") or "",
                 row.get("source_path") or "",
                 row.get("source_folder") or "",
                 str(int(row.get("full_project_copy") or 0)),
@@ -6529,7 +6458,8 @@ def get_project(project_id: int) -> Dict[str, Any]:
         "art_style": row["art_style"] or "",
         "project_era": row.get("project_era") or "",
         "tags": json.loads(row["tags_json"] or "[]"),
-        "source_path": row.get("source_path") or "",
+        "project_root": _project_root_from_row(row),
+        "source_path": _project_root_from_row(row),
         "source_folder": row.get("source_folder") or "",
         "source_preference": _normalize_source_preference(row.get("source_preference"), "external"),
         "full_project_copy": bool(row.get("full_project_copy") or 0),
@@ -6551,8 +6481,10 @@ def update_project(project_id: int, payload: ProjectUpdate) -> Dict[str, Any]:
             raise HTTPException(status_code=400, detail="Project name is required")
     if "tags" in data:
         data["tags_json"] = json.dumps(data.pop("tags") or [])
-    if "source_path" in data and data["source_path"] is not None:
-        data["source_path"] = data["source_path"].strip() or None
+    if "project_root" in data:
+        data["source_path"] = _normalize_optional_path_value(data.pop("project_root"))
+    elif "source_path" in data:
+        data["source_path"] = _normalize_optional_path_value(data["source_path"])
     if "source_folder" in data and data["source_folder"] is not None:
         cleaned = re.split(r"[\/]+", str(data["source_folder"]).strip().strip("/\\"))
         data["source_folder"] = (cleaned[-1] if cleaned else data["source_folder"]).strip() or None
@@ -6730,7 +6662,7 @@ def reimport_project(project_id: int, payload: ProjectReimport) -> Dict[str, Any
         raise HTTPException(status_code=404, detail="Project not found")
     _normalize_project_folder_for_project(conn, project)
 
-    source_path = payload.source_path or project.get("source_path")
+    source_path = _normalize_optional_path_value(payload.project_root if payload.project_root is not None else payload.source_path) or _normalize_optional_path_value(project.get("source_path"))
     source_folder = payload.source_folder or project.get("source_folder")
     if source_folder:
         cleaned = re.split(r"[\/]+", str(source_folder).strip().strip("/\\"))
@@ -6742,7 +6674,7 @@ def reimport_project(project_id: int, payload: ProjectReimport) -> Dict[str, Any
     )
     if not source_path and not source_folder:
         conn.close()
-        raise HTTPException(status_code=400, detail="Source path is missing")
+        raise HTTPException(status_code=400, detail="Project root is missing")
     canonical_folder_path = _normalize_legacy_project_folder_path(project.get("folder_path"))
     internal_source_path = _to_data_relative_path(canonical_folder_path) or canonical_folder_path
 
@@ -6800,13 +6732,18 @@ def run_project_export_cmd(project_id: int, payload: ProjectExportCmd) -> Dict[s
     else:
         work_root = dest_root
     uproject_path = _prefer_import_uproject(work_root)
+    _ensure_project_render_defaults(Path(uproject_path).parent)
 
     game_path = _resolve_export_game_path(project, payload.game_path if payload else None)
+    b_skip_preview_images = bool(payload and payload.skip_preview_images)
+    exec_cmd = f"aeb {game_path}"
+    if b_skip_preview_images:
+        exec_cmd += " -no-images"
 
     args = [
         ue_cmd,
         str(uproject_path),
-        f"-ExecCmds=aeb {game_path}",
+        f"-ExecCmds={exec_cmd}",
         "-nop4",
         "-nosplash",
         "-unattended",
@@ -7012,11 +6949,6 @@ def translate_tags_all_missing() -> Dict[str, Any]:
     return {"status": "queued", "task_id": task_id}
 
 
-@app.get("/projects/{project_id}/embedding-status")
-def project_embedding_status(project_id: int) -> Dict[str, Any]:
-    with EMBED_LOCK:
-        return EMBED_PROGRESS.get(str(project_id), {"status": "idle", "done": 0, "total": 0, "errors": 0})
-
 @app.post("/projects/tag-missing-all")
 def tag_missing_all() -> Dict[str, Any]:
     task_id = _enqueue_task("tag_missing_all", None)
@@ -7027,28 +6959,6 @@ def tag_missing_all() -> Dict[str, Any]:
 def tag_all_projects() -> Dict[str, Any]:
     task_id = _enqueue_task("tag_retag_all", None)
     return {"status": "queued", "task_id": task_id}
-
-
-
-@app.post("/projects/{project_id}/embeddings/regenerate")
-def regenerate_project_embeddings(project_id: int) -> Dict[str, Any]:
-    _set_embed_progress(str(project_id), {"status": "queued", "done": 0, "total": 0, "errors": 0})
-    task_id = _enqueue_task("embeddings_project", project_id)
-    return {"status": "queued", "task_id": task_id}
-
-
-@app.get("/embeddings/status")
-def all_embeddings_status() -> Dict[str, Any]:
-    with EMBED_LOCK:
-        return EMBED_PROGRESS.get("all", {"status": "idle", "done": 0, "total": 0, "errors": 0})
-
-
-@app.post("/embeddings/regenerate-all")
-def regenerate_all_embeddings() -> Dict[str, Any]:
-    _set_embed_progress("all", {"status": "queued_restart", "done": 0, "total": 0, "errors": 0})
-    task_id = _enqueue_task("embeddings_all_deferred", None)
-    return {"status": "queued_restart", "task_id": task_id}
-
 
 @app.put("/settings")
 def update_settings(payload: SettingsUpdate) -> Dict[str, str]:
@@ -7076,9 +6986,9 @@ def update_settings(payload: SettingsUpdate) -> Dict[str, str]:
             "serve_frontend",
             "tag_use_batch_mode",
             "tag_translate_enabled",
-            "generate_embeddings_on_import",
             "default_full_project_copy",
             "setcard_single_image_only",
+            "export_skip_preview_images",
         }:
             if isinstance(value, bool):
                 value = "true" if value else "false"
@@ -7380,7 +7290,7 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
     if "ue_cmd_path" not in masked:
         masked["ue_cmd_path"] = ""
     if "server_mode_enabled" not in masked:
-        masked["server_mode_enabled"] = "true"
+        masked["server_mode_enabled"] = "false"
     if "export_resolve_deep_roots" not in masked or not str(masked.get("export_resolve_deep_roots") or "").strip():
         masked["export_resolve_deep_roots"] = DEFAULT_DEEP_RESOLVE_ROOTS_CSV
     default_export_check = "/assets/exists?hash={hash}&hash_type=blake3&source_path={source_path}"
@@ -7396,6 +7306,11 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
     if "export_upload_after_export" in masked:
         raw = str(masked.get("export_upload_after_export") or "").strip().lower()
         masked["export_upload_after_export"] = raw in {"1", "true", "yes", "on"}
+    if "export_skip_preview_images" not in masked:
+        masked["export_skip_preview_images"] = "false"
+    if "export_skip_preview_images" in masked:
+        raw = str(masked.get("export_skip_preview_images") or "").strip().lower()
+        masked["export_skip_preview_images"] = raw in {"1", "true", "yes", "on"}
     if "server_mode_enabled" in masked:
         raw = str(masked.get("server_mode_enabled") or "").strip().lower()
         masked["server_mode_enabled"] = raw in {"1", "true", "yes", "on"}
@@ -7408,11 +7323,6 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
     if "tag_use_batch_mode" in masked:
         raw = str(masked.get("tag_use_batch_mode") or "").strip().lower()
         masked["tag_use_batch_mode"] = "true" if raw in {"1", "true", "yes", "on"} else "false"
-    if "generate_embeddings_on_import" in masked:
-        raw = str(masked.get("generate_embeddings_on_import") or "").strip().lower()
-        masked["generate_embeddings_on_import"] = "true" if raw in {"1", "true", "yes", "on"} else "false"
-    else:
-        masked["generate_embeddings_on_import"] = "false"
     if "default_full_project_copy" in masked:
         raw = str(masked.get("default_full_project_copy") or "").strip().lower()
         masked["default_full_project_copy"] = "true" if raw in {"1", "true", "yes", "on"} else "false"
@@ -7715,35 +7625,25 @@ def _upload_asset_sync(
         deep_root_names = _deep_roots_from_settings(settings)
         raw_server_mode = str(settings.get("server_mode_enabled") or "").strip().lower()
         server_mode_enabled = raw_server_mode in {"1", "true", "yes", "on"}
+        source_path_hint = source_path or str(meta.get("source_root_path") or meta.get("source_path") or meta.get("resolve_source_path") or "").strip() or None
         project_row = fetch_one(conn, "SELECT id, folder_path, source_path, source_folder FROM projects WHERE id = ?", (project_id,)) if project_id is not None else None
         if project_id is not None and not project_row:
             logger.warning("Upload project_id %s not found in DB", project_id)
         if not project_row:
-            if source_path:
-                inferred_source_folder = _infer_source_folder_from_path(source_path, deep_root_names=deep_root_names)
-                if inferred_source_folder:
-                    inferred_leaf = Path(inferred_source_folder).name
-                    by_folder = fetch_one(
-                        conn,
-                        "SELECT id, folder_path, source_path, source_folder FROM projects WHERE lower(source_folder) = lower(?) OR lower(source_folder) = lower(?)",
-                        (inferred_source_folder, inferred_leaf),
-                    )
-                    if by_folder:
-                        project_id = int(by_folder["id"])
-                        project_row = by_folder
-                by_source = _find_project_by_source(conn, source_path, None, deep_root_names=deep_root_names)
-                if not project_row and by_source:
+            if source_path_hint:
+                by_source = _find_project_by_root(conn, source_path_hint, None)
+                if by_source:
                     project_id = int(by_source["id"])
                     project_row = fetch_one(conn, "SELECT id, folder_path, source_path, source_folder FROM projects WHERE id = ?", (project_id,))
                 if not project_row:
                     try:
-                        resolved = resolve_project(source_path, auto_create=True)
+                        resolved = resolve_project(project_root=source_path_hint, auto_create=True)
                         resolved_project_id = int((resolved or {}).get("project_id") or 0)
                         if resolved_project_id > 0:
                             project_id = resolved_project_id
                             project_row = fetch_one(conn, "SELECT id, folder_path, source_path, source_folder FROM projects WHERE id = ?", (project_id,))
                     except Exception as exc:
-                        logger.warning("Upload source-path resolve/auto-create failed for source_path=%s err=%s", source_path, exc)
+                        logger.warning("Upload source-path resolve/auto-create failed for source_path=%s err=%s", source_path_hint, exc)
             resolved_id = _resolve_project_id_from_meta(conn, meta)
             if not project_row and resolved_id:
                 project_id = resolved_id
@@ -7751,9 +7651,9 @@ def _upload_asset_sync(
             if not project_row:
                 vendor = str(meta.get("vendor") or "").strip()
                 if vendor:
-                    existing_vendor = fetch_one(conn, "SELECT id FROM projects WHERE lower(source_folder) = lower(?)", (vendor,))
+                    existing_vendor = _find_project_by_root(conn, vendor, None)
                     if existing_vendor:
-                        project_id = existing_vendor["id"]
+                        project_id = int(existing_vendor["id"])
                         project_row = fetch_one(conn, "SELECT id, folder_path, source_path, source_folder FROM projects WHERE id = ?", (project_id,))
                     else:
                         logger.warning("Upload resolve failed, auto-creating project for vendor=%s", vendor)
@@ -7865,10 +7765,6 @@ def _upload_asset_sync(
     settings = get_settings(write_conn)
     translated_tags = _translate_tags_if_enabled(settings, tags)
     merged_tags = _merge_tags_for_asset(tags, translated_tags)
-    embedding = None
-    if _should_generate_embeddings_on_import(settings):
-        embedding_text = _build_embedding_text(name, description, tags, translated_tags)
-        embedding = embed_text(embedding_text)
 
     cur = write_conn.cursor()
     def _insert_asset():
@@ -7876,10 +7772,10 @@ def _upload_asset_sync(
             """
             INSERT INTO assets (
                 asset_dir, name, description, type, project_id, hash_main_blake3, hash_main_sha256, hash_full_blake3,
-                tags_json, meta_json, embedding_json, images_json, thumb_image, detail_image, full_image,
+                tags_json, meta_json, images_json, thumb_image, detail_image, full_image,
                 anim_thumb, anim_detail, zip_path, size_bytes, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(asset_dir.relative_to(ASSETS_DIR)),
@@ -7892,7 +7788,6 @@ def _upload_asset_sync(
                 hash_full or None,
                 json.dumps(merged_tags),
                 json.dumps(meta),
-                json.dumps(embedding) if embedding is not None else None,
                 json.dumps([]),
                 thumb_image,
                 detail_image,
@@ -8072,17 +7967,17 @@ def _run_projects_import_task(task_id: int) -> None:
                 category_name = (row.get("category_name") or "").strip() or None
                 is_ai_raw = (row.get("is_ai_generated") or "").strip().lower()
                 is_ai_generated = is_ai_raw in {"1", "true", "yes", "on"}
-                source_path = (row.get("source_path") or "").strip() or None
+                source_path = (row.get("project_root") or row.get("source_path") or "").strip() or None
                 source_folder = (row.get("source_folder") or "").strip() or None
                 if not source_path:
-                    raise ValueError("Source content path is required")
+                    raise ValueError("Project root is required")
                 full_project_copy_raw = (row.get("full_project_copy") or "").strip().lower()
                 full_project_copy = full_project_copy_raw in {"1", "true", "yes", "on"}
                 source_preference = _normalize_source_preference((row.get("source_preference") or "").strip(), "external")
                 tags_value = (row.get("tags") or "").strip()
                 tags = [t.strip() for t in tags_value.split(",") if t.strip()]
 
-                existing = _find_project_by_source(conn, source_path, source_folder)
+                existing = _find_project_by_root(conn, source_path, source_folder)
                 if existing:
                     skipped += 1
                     continue
@@ -8203,7 +8098,7 @@ def _run_projects_import_task(task_id: int) -> None:
 def _clear_all_tags(task_id: Optional[int] = None) -> None:
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("UPDATE assets SET tags_json = '[]', embedding_json = NULL")
+    cur.execute("UPDATE assets SET tags_json = '[]'")
     cur.execute("DELETE FROM asset_tags")
     _db_retry(lambda: conn.commit())
     conn.close()
@@ -8359,20 +8254,10 @@ def _run_tags_import_task(task_id: int) -> None:
                     tags = _normalize_tags(tags)
                     translated_tags = _translate_tags_if_enabled(settings, tags)
                     merged_tags = _merge_tags_for_asset(tags, translated_tags)
-                    if _should_generate_embeddings_on_import(settings):
-                        embedding_text = _build_embedding_text(
-                            asset["name"], asset["description"] or "", tags, translated_tags
-                        )
-                        embedding = embed_text(embedding_text)
-                        cur.execute(
-                            "UPDATE assets SET tags_json = ?, embedding_json = ? WHERE id = ?",
-                            (json.dumps(merged_tags), json.dumps(embedding), asset["id"]),
-                        )
-                    else:
-                        cur.execute(
-                            "UPDATE assets SET tags_json = ?, embedding_json = NULL WHERE id = ?",
-                            (json.dumps(merged_tags), asset["id"]),
-                        )
+                    cur.execute(
+                        "UPDATE assets SET tags_json = ? WHERE id = ?",
+                        (json.dumps(merged_tags), asset["id"]),
+                    )
                     _upsert_asset_tags(
                         conn,
                         asset.get("id"),
@@ -8479,7 +8364,7 @@ def asset_exists(hash: str, hash_type: str = "blake3", project_id: Optional[int]
         return {"exists": False, "id": None}
     pid = int(project_id) if project_id is not None else 0
     if pid <= 0 and source_path:
-        row = _find_project_by_source(conn, source_path, None, deep_root_names=deep_root_names)
+        row = _find_project_by_root(conn, source_path, None)
         if row:
             pid = int(row.get("id") or 0)
     if pid <= 0:
@@ -8659,22 +8544,19 @@ def list_assets(
     tag: Optional[str] = None,
     nanite: Optional[str] = None,
     collision: Optional[str] = None,
-    semantic: bool = False,
     page: int = 1,
     page_size: int = 24,
 ) -> Dict[str, Any]:
     conn = get_db()
     settings = get_settings(conn)
     query = str(query or "").strip()
-    if query and semantic and len(query) < 3:
-        semantic = False
     try:
         display_limit = int(settings.get("tag_display_limit") or 0)
     except ValueError:
         display_limit = 0
     filters = []
     params: List[Any] = []
-    use_fts = bool(query and not semantic)
+    use_fts = bool(query)
 
     def _fts_escape(term: str) -> str:
         cleaned = str(term or "").strip()
@@ -8754,7 +8636,7 @@ def list_assets(
         if fts_parts:
             filters.append("assets_fts MATCH ?")
             params.append(" AND ".join(fts_parts))
-    elif query and not semantic:
+    elif query:
         query_lc = query.lower()
         filters.append(
             "("
@@ -8770,166 +8652,6 @@ def list_assets(
 
     total_all_row = fetch_one(conn, "SELECT COUNT(*) AS count FROM assets")
     total_all = total_all_row["count"] if total_all_row else 0
-
-    if query and semantic:
-        max_candidates = 2000
-    if query and semantic:
-        candidate_rows: List[Dict[str, Any]] = []
-        semantic_candidate_base = (
-            "FROM assets a "
-            "JOIN assets_fts ON assets_fts.rowid = a.id "
-            "JOIN projects p ON p.id = a.project_id "
-            "LEFT JOIN asset_tags t ON t.hash_full_blake3 = a.hash_full_blake3"
-        )
-        semantic_candidate_filters = list(filters)
-        semantic_candidate_params = list(params)
-        semantic_candidate_filters.append("assets_fts MATCH ?")
-        semantic_candidate_params.append(_fts_escape(query))
-        semantic_candidate_where = (
-            f"WHERE {' AND '.join(semantic_candidate_filters)}" if semantic_candidate_filters else ""
-        )
-        candidate_rows = fetch_all(
-            conn,
-            f"SELECT a.*, t.tags_translated_json, p.art_style AS project_art_style, p.project_era "
-            f"{semantic_candidate_base} {semantic_candidate_where} LIMIT ?",
-            semantic_candidate_params + [max_candidates],
-        )
-        if not candidate_rows:
-            like_value = f"%{query.lower()}%"
-            semantic_candidate_filters = list(filters)
-            semantic_candidate_params = list(params)
-            semantic_candidate_filters.append(
-                "("
-                "lower(a.name) LIKE ? "
-                "OR lower(a.description) LIKE ? "
-                "OR EXISTS (SELECT 1 FROM json_each(a.tags_json) jq WHERE lower(CAST(jq.value AS TEXT)) LIKE ?)"
-                ")"
-            )
-            semantic_candidate_params.extend([like_value, like_value, like_value])
-            semantic_candidate_where = (
-                f"WHERE {' AND '.join(semantic_candidate_filters)}" if semantic_candidate_filters else ""
-            )
-            candidate_rows = fetch_all(
-                conn,
-                f"SELECT a.*, t.tags_translated_json, p.art_style AS project_art_style, p.project_era "
-                f"{base} {semantic_candidate_where} LIMIT ?",
-                semantic_candidate_params + [max_candidates],
-            )
-        rows = candidate_rows
-        try:
-            query_vec = embed_text(query)
-        except Exception as exc:
-            logger.warning("Semantic query embedding failed, falling back to text search: %s", exc)
-            query_vec = []
-        missing_rows: List[Dict[str, Any]] = []
-        missing_texts: List[str] = []
-        for row in rows:
-            raw_emb = row.get("embedding_json") or ""
-            has_embedding = False
-            if raw_emb:
-                try:
-                    parsed = json.loads(raw_emb)
-                    has_embedding = bool(parsed)
-                except Exception:
-                    has_embedding = False
-            if not has_embedding:
-                try:
-                    tags_raw = json.loads(row.get("tags_json") or "[]")
-                except Exception:
-                    tags_raw = []
-                try:
-                    translated_raw = json.loads(row.get("tags_translated_json") or "[]")
-                except Exception:
-                    translated_raw = []
-                missing_rows.append(row)
-                missing_texts.append(
-                    _build_embedding_text(
-                        row.get("name") or "",
-                        row.get("description") or "",
-                        tags_raw if isinstance(tags_raw, list) else [],
-                        translated_raw if isinstance(translated_raw, list) else [],
-                    )
-                )
-        if missing_texts:
-            try:
-                fallback_vectors = embed_texts(missing_texts)
-                for row, vec in zip(missing_rows, fallback_vectors):
-                    row["embedding_json"] = json.dumps(vec)
-            except Exception as exc:
-                logger.warning("Semantic fallback embedding failed for %s row(s): %s", len(missing_texts), exc)
-        scored = []
-        query_lc = query.lower()
-        query_tokens = _tokenize_search_text(query_lc)
-        min_semantic_score = 0.35
-        for row in rows:
-            try:
-                emb = json.loads(row.get("embedding_json") or "[]")
-            except json.JSONDecodeError:
-                emb = []
-            semantic_score = cosine_similarity(query_vec, emb)
-            name_text = str(row.get("name") or "").lower()
-            description_text = str(row.get("description") or "").lower()
-            try:
-                tags_text = " ".join(json.loads(row.get("tags_json") or "[]")).lower()
-            except Exception:
-                tags_text = ""
-            try:
-                translated_text = " ".join(json.loads(row.get("tags_translated_json") or "[]")).lower()
-            except Exception:
-                translated_text = ""
-            search_blob = " ".join(part for part in [name_text, description_text, tags_text, translated_text] if part)
-
-            lexical_bonus = 0.0
-            if query_lc and query_lc in search_blob:
-                lexical_bonus += 0.30
-            if query_tokens:
-                matched_tokens = sum(1 for token in query_tokens if token in search_blob)
-                lexical_bonus += min(0.20, 0.06 * matched_tokens)
-
-            combined_score = semantic_score + lexical_bonus
-            if semantic_score >= min_semantic_score or lexical_bonus > 0:
-                scored.append((combined_score, row))
-        scored.sort(key=lambda item: item[0], reverse=True)
-        if not scored:
-            fallback_filters = list(filters)
-            fallback_params = list(params)
-            fallback_filters.append(
-                "("
-                "lower(a.name) LIKE ? "
-                "OR lower(a.description) LIKE ? "
-                "OR EXISTS (SELECT 1 FROM json_each(a.tags_json) jq WHERE lower(CAST(jq.value AS TEXT)) LIKE ?)"
-                ")"
-            )
-            like_value = f"%{query_lc}%"
-            fallback_params.extend([like_value, like_value, like_value])
-            fallback_where = f"WHERE {' AND '.join(fallback_filters)}" if fallback_filters else ""
-            count_row = fetch_one(conn, f"SELECT COUNT(*) AS count {base} {fallback_where}", fallback_params)
-            total = count_row["count"] if count_row else 0
-            offset = (page - 1) * page_size
-            rows = fetch_all(
-                conn,
-                f"SELECT a.*, t.tags_translated_json, p.art_style AS project_art_style, p.project_era {base} {fallback_where} {order_by} LIMIT ? OFFSET ?",
-                fallback_params + [page_size, offset],
-            )
-            conn.close()
-            return {
-                "items": [serialize_asset(row, display_limit) for row in rows],
-                "total": total,
-                "total_all": total_all,
-                "page": page,
-                "page_size": page_size,
-            }
-        total = len(scored)
-        offset = (page - 1) * page_size
-        page_rows = [row for _, row in scored[offset : offset + page_size]]
-        conn.close()
-        return {
-            "items": [serialize_asset(row, display_limit) for row in page_rows],
-            "total": total,
-            "total_all": total_all,
-            "page": page,
-            "page_size": page_size,
-        }
 
     count_row = fetch_one(conn, f"SELECT COUNT(*) AS count {base} {where}", params)
     total = count_row["count"] if count_row else 0
@@ -9134,6 +8856,8 @@ def get_asset(asset_id: str) -> Dict[str, Any]:
             "WHERE a.hash_main_blake3 = ? OR a.hash_full_blake3 = ? LIMIT 1",
             (asset_id, asset_id),
         )
+    if row:
+        row = dict(row)
     project_settings = {}
     if row and row.get("project_id"):
         project_row = fetch_one(
@@ -9152,6 +8876,7 @@ def get_asset(asset_id: str) -> Dict[str, Any]:
                 "name": project_row["name"],
                 "link": project_row.get("link"),
                 "folder_path": project_row.get("folder_path"),
+                "project_root": project_row.get("source_path") or "",
                 "source_path": project_row.get("source_path") or "",
                 "source_folder": (Path(project_row.get("source_folder")).name if project_row.get("source_folder") else ""),
                 "source_preference": _normalize_source_preference(project_row.get("source_preference"), "external"),
@@ -9215,18 +8940,10 @@ def update_asset_tags(asset_id: int, payload: AssetTagUpdate) -> Dict[str, Any]:
     translated_tags = _translate_tags_if_enabled(settings, tags)
     merged_tags = _merge_tags_for_asset(tags, translated_tags)
     cur = conn.cursor()
-    if _should_generate_embeddings_on_import(settings):
-        embedding_text = _build_embedding_text(asset["name"], asset["description"] or "", tags, translated_tags)
-        embedding = embed_text(embedding_text)
-        cur.execute(
-            "UPDATE assets SET tags_json = ?, embedding_json = ? WHERE id = ?",
-            (json.dumps(merged_tags), json.dumps(embedding), asset_id),
-        )
-    else:
-        cur.execute(
-            "UPDATE assets SET tags_json = ?, embedding_json = NULL WHERE id = ?",
-            (json.dumps(merged_tags), asset_id),
-        )
+    cur.execute(
+        "UPDATE assets SET tags_json = ? WHERE id = ?",
+        (json.dumps(merged_tags), asset_id),
+    )
     _upsert_asset_tags(
         conn,
         asset_id,
@@ -9270,20 +8987,10 @@ def merge_asset_tags(payload: AssetTagBulkMerge) -> Dict[str, Any]:
             merged = _normalize_tags(existing + incoming)
             translated_tags = _translate_tags_if_enabled(settings, merged)
             merged_tags = _merge_tags_for_asset(merged, translated_tags)
-            if _should_generate_embeddings_on_import(settings):
-                embedding_text = _build_embedding_text(
-                    asset["name"], asset["description"] or "", merged, translated_tags
-                )
-                embedding = embed_text(embedding_text)
-                cur.execute(
-                    "UPDATE assets SET tags_json = ?, embedding_json = ? WHERE id = ?",
-                    (json.dumps(merged_tags), json.dumps(embedding), asset_id),
-                )
-            else:
-                cur.execute(
-                    "UPDATE assets SET tags_json = ?, embedding_json = NULL WHERE id = ?",
-                    (json.dumps(merged_tags), asset_id),
-                )
+            cur.execute(
+                "UPDATE assets SET tags_json = ? WHERE id = ?",
+                (json.dumps(merged_tags), asset_id),
+            )
             _upsert_asset_tags(
                 conn,
                 asset_id,
@@ -9362,18 +9069,10 @@ def generate_asset_tags(asset_id: int) -> Dict[str, Any]:
     merged_tags = _merge_tags_for_asset(tags, translated_tags)
     conn = get_db()
     cur = conn.cursor()
-    if _should_generate_embeddings_on_import(settings):
-        embedding_text = _build_embedding_text(row["name"], row["description"] or "", tags, translated_tags)
-        embedding = embed_text(embedding_text)
-        cur.execute(
-            "UPDATE assets SET tags_json = ?, embedding_json = ? WHERE id = ?",
-            (json.dumps(merged_tags), json.dumps(embedding), asset_id),
-        )
-    else:
-        cur.execute(
-            "UPDATE assets SET tags_json = ?, embedding_json = NULL WHERE id = ?",
-            (json.dumps(merged_tags), asset_id),
-        )
+    cur.execute(
+        "UPDATE assets SET tags_json = ? WHERE id = ?",
+        (json.dumps(merged_tags), asset_id),
+    )
     _upsert_asset_tags(
         conn,
         asset_id,

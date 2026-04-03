@@ -7,6 +7,19 @@ FRONTEND_DIR="$ROOT_DIR/frontend"
 DIST_DIR="$FRONTEND_DIR/dist"
 VENV_DIR="$BACKEND_DIR/.venv"
 VENV_PYTHON="$VENV_DIR/bin/python"
+REPAIR_NO_PIC_ON_STARTUP=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --repair-no-pic)
+      REPAIR_NO_PIC_ON_STARTUP=1
+      ;;
+    *)
+      echo "Unknown argument: $arg" >&2
+      exit 1
+      ;;
+  esac
+done
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -64,19 +77,22 @@ echo "[4/4] Starting backend with bundled UI..."
 export ASSET_UI=true
 export ASSET_UI_DIST="../frontend/dist"
 export ASSET_SERVER_HOST=0.0.0.0
-export ASSET_SERVER_PORT=8008
+export ASSET_SERVER_PORT=7985
 export ASSET_SERVER_LOG_LEVEL=info
 export ASSET_SERVER_RELOAD=0
 export ASSET_SERVER_CWD="$BACKEND_DIR"
+if [[ "$REPAIR_NO_PIC_ON_STARTUP" == "1" ]]; then
+  export ASSET_NO_PIC_REPAIR_ON_STARTUP=1
+fi
 
-cd "$BACKEND_DIR"
-(
-  for _ in $(seq 1 120); do
-    if "$VENV_PYTHON" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8008/health', timeout=1)"; then
-      open_browser "http://localhost:8008"
+  cd "$BACKEND_DIR"
+  (
+    for _ in $(seq 1 120); do
+    if "$VENV_PYTHON" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7985/health', timeout=1)"; then
+      open_browser "http://localhost:7985"
       break
     fi
     sleep 0.5
   done
 ) >/dev/null 2>&1 &
-exec "$VENV_PYTHON" -m uvicorn main:app --host 0.0.0.0 --port 8008 --log-level info
+exec "$VENV_PYTHON" -m uvicorn main:app --host 0.0.0.0 --port 7985 --log-level info

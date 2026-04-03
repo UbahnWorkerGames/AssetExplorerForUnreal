@@ -32,9 +32,7 @@ import {
   deleteProjectAssets,
   migrateAsset,
   openProject,
-  regenerateEmbeddingsAll,
   testLlmTags,
-  regenerateProjectEmbeddings,
   retagProject,
   tagProjectMissing,
   tagMissingAllProjects,
@@ -78,8 +76,6 @@ Existing tags: {existing_tags}`;
 const LIVE_CONSOLE_MAX_LINES = 500;
 const isTrue = (value) => String(value).toLowerCase() === "true" || value === true;
 const taskLabelMap = {
-  embeddings_all: "Rebuild semantic (all)",
-  embeddings_project: "Rebuild semantic (project)",
   tag_project_missing: "Tag missing (project)",
   tag_project_retag: "Tag all (project)",
   tag_missing_all: "Tag missing (all)",
@@ -190,20 +186,27 @@ function getProjectSetcardUrl(project) {
   return resolveApiUrl(`/media/projects/${slug}/setcard.png`);
 }
 
-function getProjectActivePath(project) {
+function normalizeProjectRootPath(value) {
+  const raw = String(value || "").trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!raw) return "";
+  const parts = raw.split("/").filter(Boolean);
+  const contentIndex = parts.findIndex((part) => part.toLowerCase() === "content");
+  if (contentIndex > 0) return parts.slice(0, contentIndex).join("/");
+  if (contentIndex === 0) return "";
+  return raw;
+}
+
+function getProjectRootPath(project) {
   const pref = String(project?.source_preference || "external").toLowerCase();
-  const folderPath = String(project?.folder_path || "").trim().replace(/\\/g, "/").replace(/\/+$/, "");
-  const sourcePath = String(project?.source_path || "").trim().replace(/\\/g, "/").replace(/\/+$/, "");
-  const sourceFolder = String(project?.source_folder || "").trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  const folderPath = normalizeProjectRootPath(project?.folder_path);
+  const projectRoot = normalizeProjectRootPath(project?.project_root || project?.source_path);
 
-  const internalContent = folderPath ? `${folderPath}/Content` : "";
-  const externalBase = sourcePath
-    ? (sourcePath.toLowerCase().endsWith("/content") ? sourcePath : `${sourcePath}/Content`)
-    : "";
-  const externalContent = externalBase ? (sourceFolder ? `${externalBase}/${sourceFolder}` : externalBase) : "";
+  if (pref === "internal") return folderPath || projectRoot;
+  return projectRoot || folderPath;
+}
 
-  if (pref === "internal") return internalContent || externalContent || folderPath || sourcePath;
-  return externalContent || internalContent || sourcePath || folderPath;
+function getProjectActivePath(project) {
+  return getProjectRootPath(project);
 }
 
 function getProjectActiveSizeBytes(project) {
@@ -342,7 +345,6 @@ export default function App() {
   const [editTags, setEditTags] = useState("");
   const [editArtStyle, setEditArtStyle] = useState("");
   const [editSourcePath, setEditSourcePath] = useState("");
-  const [editSourceFolder, setEditSourceFolder] = useState("");
   const [editIsAi, setEditIsAi] = useState(false);
   const [editFullCopy, setEditFullCopy] = useState(false);
   const [editScreenshotUrl, setEditScreenshotUrl] = useState("");
@@ -649,7 +651,7 @@ export default function App() {
     groq_model: "",
     ollama_model: "",
     import_base_url: "http://127.0.0.1:9090",
-    server_mode_enabled: true,
+    server_mode_enabled: false,
     skip_export_if_on_server: true,
     export_overwrite_zips: false,
     export_default_image_count: 1,
@@ -661,6 +663,7 @@ export default function App() {
     export_anim_sequence_image_count: 4,
     export_capture360_discard_frames: 2,
     export_upload_after_export: true,
+    export_skip_preview_images: false,
     export_resolve_deep_roots: "Dekogon_Industrial,SUBURBS,DECALS,BUILDINGS",
     export_upload_path_template: "/assets/upload",
     export_check_path_template: "/assets/exists?hash={hash}&hash_type=blake3&source_path={source_path}",
@@ -684,7 +687,6 @@ export default function App() {
     tag_batch_project_concurrency: 3,
     tag_translate_enabled: false,
     tag_display_limit: 0,
-    generate_embeddings_on_import: false,
     sidebar_width: 280,
     purge_assets_on_startup: false,
     use_temperature: false,
@@ -801,7 +803,7 @@ export default function App() {
     if (localStorage.getItem("ameb_backend_prompted") === "1") return;
 
     const fallbackBase = String(API_BASE || window.location.origin || "").replace(/\/$/, "");
-    const answer = window.prompt("Backend server URL (example: http://192.168.185.109:8008)", fallbackBase);
+    const answer = window.prompt("Backend server URL (example: http://192.168.185.109:7985)", fallbackBase);
     let chosen = String(answer || fallbackBase).trim();
     if (!chosen) {
       chosen = fallbackBase;
@@ -1176,6 +1178,10 @@ export default function App() {
         const raw = String(clean.skip_export_if_on_server).toLowerCase();
         clean.skip_export_if_on_server = raw === "true" || raw === "1" || raw === "yes" || raw === "on";
       }
+      if (clean.export_skip_preview_images !== undefined) {
+        const raw = String(clean.export_skip_preview_images).toLowerCase();
+        clean.export_skip_preview_images = raw === "true" || raw === "1" || raw === "yes" || raw === "on";
+      }
       if (clean.server_mode_enabled !== undefined) {
         const raw = String(clean.server_mode_enabled).toLowerCase();
         clean.server_mode_enabled = raw === "true" || raw === "1" || raw === "yes" || raw === "on";
@@ -1195,10 +1201,6 @@ export default function App() {
       if (clean.setcard_single_image_only !== undefined) {
         const raw = String(clean.setcard_single_image_only).toLowerCase();
         clean.setcard_single_image_only = raw === "true" || raw === "1" || raw === "yes" || raw === "on";
-      }
-      if (clean.generate_embeddings_on_import !== undefined) {
-        const raw = String(clean.generate_embeddings_on_import).toLowerCase();
-        clean.generate_embeddings_on_import = raw === "true" || raw === "1" || raw === "yes" || raw === "on";
       }
       if (clean.sidebar_width !== undefined && clean.sidebar_width !== "") {
         const parsedWidth = Number(clean.sidebar_width);
@@ -1829,7 +1831,7 @@ export default function App() {
         link: projectLink,
         tags,
         art_style: projectArtStyle || "regular",
-        source_path: projectSourcePath || undefined,
+        project_root: projectSourcePath || undefined,
         source_folder: projectSourceFolder || undefined,
         full_project_copy: projectFullCopy,
         is_ai_generated: createIsAi,
@@ -2046,29 +2048,6 @@ export default function App() {
     } catch (err) {
       console.error(err);
       toast.error(`Tag generation failed: ${err.message || "unknown error"}`);
-    }
-  }
-  async function handleRegenerateProjectEmbeddings(projectId) {
-    try {
-      await regenerateProjectEmbeddings(projectId);
-      toast.info("Regenerating semantic embeddings...");
-    } catch (err) {
-      toast.error(`Embedding regen failed: ${err.message || "unknown error"}`);
-    }
-  }
-  async function handleRegenerateEmbeddingsAll() {
-    if (!window.confirm("Regenerate embeddings for all assets?")) return;
-    try {
-      await regenerateEmbeddingsAll();
-      toast.info("Semantic rebuild scheduled for next server restart.");
-      const shouldRestart = window.confirm(
-        "Semantic rebuild runs on next restart. Restart backend now?"
-      );
-      if (shouldRestart) {
-        await handleRestartServer(false);
-      }
-    } catch (err) {
-      toast.error(`Embedding regen failed: ${err.message || "unknown error"}`);
     }
   }
   async function maybeOfferRestartForDeferredTagAction(actionLabel) {
@@ -2295,8 +2274,7 @@ export default function App() {
         link: editLink,
         tags,
         art_style: editArtStyle,
-        source_path: editSourcePath || undefined,
-        source_folder: editSourceFolder || undefined,
+        project_root: editSourcePath || undefined,
         full_project_copy: editFullCopy,
         is_ai_generated: editIsAi,
       });
@@ -2321,8 +2299,7 @@ export default function App() {
     setEditLink(project.link || "");
     setEditTags((project.tags || []).join(", "));
     setEditArtStyle(project.art_style || "");
-    setEditSourcePath(project.source_path || "");
-    setEditSourceFolder(project.source_folder || "");
+    setEditSourcePath(project.project_root || project.source_path || "");
     setEditIsAi(Boolean(project.is_ai_generated));
     setEditFullCopy(Boolean(project.full_project_copy));
     setEditScreenshotUrl("");
@@ -2352,6 +2329,9 @@ export default function App() {
       }
       if (payload.export_upload_after_export !== undefined) {
         payload.export_upload_after_export = payload.export_upload_after_export ? "true" : "false";
+      }
+      if (payload.export_skip_preview_images !== undefined) {
+        payload.export_skip_preview_images = payload.export_skip_preview_images ? "true" : "false";
       }
       if (payload.default_full_project_copy !== undefined) {
         payload.default_full_project_copy = payload.default_full_project_copy ? "true" : "false";
@@ -2511,6 +2491,13 @@ export default function App() {
     window.open(url, "_blank", "noopener");
     toast.info("Export started");
   }
+  async function handleOpenSelectedAssetSource() {
+    if (!selectedProject) {
+      toast.error("No source folder available");
+      return;
+    }
+    await handleOpenProjectSource(selectedProject);
+  }
   async function handleDeleteAsset(assetId) {
     if (!window.confirm("Delete asset from database? Files will remain.")) return;
     try {
@@ -2669,13 +2656,13 @@ export default function App() {
   async function handleReimportProject(project) {
     try {
       let payload = {};
-      if (!project.source_path && !project.source_folder) {
-        const sourceInput = window.prompt("Source content/pack path", "") || "";
+      if (!project.project_root && !project.source_folder) {
+        const sourceInput = window.prompt("Project root path", "") || "";
         if (!sourceInput.trim()) {
-          toast.error("Source path missing");
+          toast.error("Project root missing");
           return;
         }
-        payload = { source_path: sourceInput.trim() };
+        payload = { project_root: sourceInput.trim() };
       }
       await reimportProject(project.id, payload);
       markProjectImported(project.id);
@@ -3556,6 +3543,14 @@ function formatSizeGb(bytes) {
                               Export
                             </button>
                             <button
+                              className="btn btn-outline-dark btn-sm"
+                              onClick={handleOpenSelectedAssetSource}
+                              disabled={!selectedProject}
+                              title="Open the source folder for this asset's project."
+                            >
+                              Open source
+                            </button>
+                            <button
                               className="btn btn-outline-danger btn-sm"
                               onClick={() => handleDeleteAsset(selectedAsset.id)}
                             >
@@ -3875,14 +3870,6 @@ function formatSizeGb(bytes) {
                       <button
                         className="btn btn-outline-dark btn-sm"
                         type="button"
-                        onClick={handleRegenerateEmbeddingsAll}
-                        title="Queue a full semantic embeddings rebuild for all assets."
-                      >
-                        Rebuild semantic (all)
-                      </button>
-                      <button
-                        className="btn btn-outline-dark btn-sm"
-                        type="button"
                         onClick={handleExportProjects}
                         title="Export project list as CSV."
                       >
@@ -4106,11 +4093,7 @@ function formatSizeGb(bytes) {
               </div>
               <div className="project-list-wrap">
                 {sortedProjects.map((project) => {
-                  const folderLabel = project.source_path
-                    ? project.source_path.split(/[/\\]+/).filter(Boolean).pop()
-                    : project.folder_path
-                      ? project.folder_path.split(/[/\\]+/).filter(Boolean).pop()
-                      : "-";
+                  const projectRootPath = getProjectRootPath(project);
                   return (
                     <div key={project.id} className="project-list-cell">
                       <div
@@ -4158,19 +4141,12 @@ function formatSizeGb(bytes) {
                               value={editTags}
                               onChange={(e) => setEditTags(e.target.value)}
                             />
-                            <label className="form-label">Source content path</label>
+                            <label className="form-label">Project root</label>
                             <input
                               className="form-control"
-                              placeholder="Source content path"
+                              placeholder="Project root"
                               value={editSourcePath}
                               onChange={(e) => setEditSourcePath(e.target.value)}
-                            />
-                            <label className="form-label">Source pack folder</label>
-                            <input
-                              className="form-control"
-                              placeholder="Source pack folder"
-                              value={editSourceFolder}
-                              onChange={(e) => setEditSourceFolder(e.target.value)}
                             />
                             <label className="form-check project-check">
                               <input
@@ -4285,10 +4261,6 @@ function formatSizeGb(bytes) {
                                 </span>
                               </div>
                               <div className="project-meta">
-                                <span className="project-meta-label">Path</span>
-                                <span className="project-meta-value">{folderLabel}</span>
-                              </div>
-                              <div className="project-meta">
                                 <span className="project-meta-label">Tagged assets</span>
                                 <span className="project-meta-value">
                                   {(projectStats[project.id]?.tagged ?? 0)}/{(projectStats[project.id]?.total ?? 0)}
@@ -4317,9 +4289,9 @@ function formatSizeGb(bytes) {
                                 </span>
                               </div>
                               <div className="project-meta">
-                                <span className="project-meta-label">Active path</span>
+                                <span className="project-meta-label">Project root</span>
                                 <span className="project-meta-value" style={{ fontSize: "10px", opacity: 0.85 }}>
-                                  {getProjectActivePath(project) || "-"}
+                                  {getProjectRootPath(project) || "-"}
                                 </span>
                               </div>
                               {projectStats[project.id]?.types &&
@@ -4388,13 +4360,6 @@ function formatSizeGb(bytes) {
                                       Re-export via UE Cmd
                                     </button>
                                   )}
-                                  <button
-                                    className="btn btn-outline-dark btn-sm"
-                                    onClick={() => handleRegenerateProjectEmbeddings(project.id)}
-                                    title="Rebuild semantic embeddings for assets in this project."
-                                  >
-                                    Rebuild semantic
-                                  </button>
                                 </div>
                                 <div className="project-action-row-group">
                                   <div className="project-action-row-label">
@@ -4525,7 +4490,7 @@ function formatSizeGb(bytes) {
                     </label>
                     <input
                       className="form-control"
-                      placeholder="Source content path"
+                      placeholder="Project root"
                       value={projectSourcePath}
                       onChange={(e) => setProjectSourcePath(e.target.value)}
                       required
@@ -4790,15 +4755,15 @@ function formatSizeGb(bytes) {
                       <input
                         className="form-check-input"
                         type="checkbox"
-                        checked={Boolean(settings.generate_embeddings_on_import)}
+                        checked={Boolean(settings.export_skip_preview_images)}
                         onChange={(e) =>
-                          setSettings((prev) => ({ ...prev, generate_embeddings_on_import: e.target.checked }))
+                          setSettings((prev) => ({ ...prev, export_skip_preview_images: e.target.checked }))
                         }
-                        title="Generate semantic embeddings automatically during import."
-                        id="generateEmbeddingsOnImport"
+                        title="Skip preview image capture during bridge exports. Metadata and Content files still export."
+                        id="exportSkipPreviewImages"
                       />
-                      <label className="form-check-label" htmlFor="generateEmbeddingsOnImport">
-                        Generate semantic embeddings on import
+                      <label className="form-check-label" htmlFor="exportSkipPreviewImages">
+                        Skip preview images on export
                       </label>
                     </div>
                   </div>
@@ -5596,11 +5561,6 @@ function formatSizeGb(bytes) {
                   )}
                 </div>
               </div>
-              <div className="settings-row">
-                <button className="btn btn-outline-dark btn-sm btn-white-text" type="button" title="Queue rebuild of all semantic embeddings (applies on next restart)." onClick={handleRegenerateEmbeddingsAll}>
-                  Rebuild embeddings (all)
-                </button>
-              </div>
               <div className="settings-compact-group">
                 <div className="settings-compact-title">LLM runtime</div>
                 <div className="settings-compact-grid">
@@ -5613,11 +5573,11 @@ function formatSizeGb(bytes) {
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, tag_use_batch_mode: e.target.checked }))
                         }
-                        title="Enable provider batch mode for OpenAI/Groq tag jobs."
+                        title="Enable provider batch mode for OpenAI tag jobs."
                         id="tagBatchMode"
                       />
                       <label className="form-check-label batch-mode-label" htmlFor="tagBatchMode">
-                        Tag batch mode (OpenAI/Groq)
+                        Tag batch mode (OpenAI)
                       </label>
                     </div>
                   </div>

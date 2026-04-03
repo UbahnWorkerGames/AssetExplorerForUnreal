@@ -9,7 +9,7 @@ export const API_BASE =
   ENV_API_BASE ||
   (typeof window !== "undefined" && window.location?.origin
     ? String(window.location.origin).trim()
-    : "http://127.0.0.1:8008");
+    : "http://127.0.0.1:7985");
 
 export async function fetchProjects(params = {}) {
   const url = new URL(`${API_BASE}/projects`);
@@ -122,18 +122,6 @@ export async function retagProject(projectId) {
   return res.json();
 }
 
-export async function regenerateProjectEmbeddings(projectId) {
-  const res = await fetch(`${API_BASE}/projects/${projectId}/embeddings/regenerate`, { method: "POST" });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-export async function regenerateEmbeddingsAll() {
-  const res = await fetch(`${API_BASE}/embeddings/regenerate-all`, { method: "POST" });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
 export async function restartServer() {
   const res = await fetch(`${API_BASE}/server/restart`, { method: "POST" });
   if (!res.ok) throw new Error(await res.text());
@@ -190,9 +178,6 @@ export async function openProject(id, target = "auto") {
 
 export async function fetchAssets(params = {}, options = {}) {
   const url = new URL(`${API_BASE}/assets`);
-  if (params.semantic === "0") {
-    url.searchParams.set("semantic", "0");
-  }
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== "") {
       url.searchParams.set(key, value);

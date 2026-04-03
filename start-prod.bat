@@ -7,6 +7,21 @@ set FRONTEND_DIR=%ROOT_DIR%frontend
 set DIST_DIR=%FRONTEND_DIR%\dist
 set VENV_DIR=%BACKEND_DIR%\.venv
 set PYTHON=%VENV_DIR%\Scripts\python.exe
+set "REPAIR_NO_PIC_ON_STARTUP=0"
+
+:parse_args
+if "%~1"=="" goto :args_done
+if /I "%~1"=="--repair-no-pic" (
+  set "REPAIR_NO_PIC_ON_STARTUP=1"
+) else (
+  echo [error] Unknown argument: %~1
+  pause
+  exit /b 1
+)
+shift
+goto :parse_args
+
+:args_done
 
 where python >nul 2>nul
 if errorlevel 1 (
@@ -70,28 +85,29 @@ echo [3/4] Starting backend with bundled UI...
 set ASSET_UI=true
 set ASSET_UI_DIST=..\frontend\dist
 set ASSET_SERVER_HOST=0.0.0.0
-set ASSET_SERVER_PORT=8008
+set ASSET_SERVER_PORT=7985
 set ASSET_SERVER_LOG_LEVEL=info
 set ASSET_SERVER_RELOAD=0
 set ASSET_SERVER_CWD=%BACKEND_DIR%
+if "%REPAIR_NO_PIC_ON_STARTUP%"=="1" set ASSET_NO_PIC_REPAIR_ON_STARTUP=1
 
 set PORT_PID=
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr /C:":8008" ^| findstr /C:"LISTENING"') do (
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr /C:":7985" ^| findstr /C:"LISTENING"') do (
   set PORT_PID=%%P
   goto :port_check_done
 )
 :port_check_done
 if defined PORT_PID (
-  echo [error] Port 8008 is already in use by PID %PORT_PID%.
+  echo [error] Port 7985 is already in use by PID %PORT_PID%.
   echo         Stop that process first.
   pause
   exit /b 1
 )
 
-echo [4/4] Backend running on http://0.0.0.0:8008
-start "" powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; for($i=0;$i -lt 120;$i++){ try { $r=Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8008/health' -TimeoutSec 2; if($r.StatusCode -ge 200 -and $r.StatusCode -lt 500){ Start-Process 'http://localhost:8008'; break } } catch {}; Start-Sleep -Milliseconds 500 }"
+echo [4/4] Backend running on http://0.0.0.0:7985
+start "" powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; for($i=0;$i -lt 120;$i++){ try { $r=Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:7985/health' -TimeoutSec 2; if($r.StatusCode -ge 200 -and $r.StatusCode -lt 500){ Start-Process 'http://localhost:7985'; break } } catch {}; Start-Sleep -Milliseconds 500 }"
 cd /d "%BACKEND_DIR%"
-call "%PYTHON%" -m uvicorn main:app --host 0.0.0.0 --port 8008 --log-level info
+call "%PYTHON%" -m uvicorn main:app --host 0.0.0.0 --port 7985 --log-level info
 
 endlocal
 cmd

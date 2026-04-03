@@ -7,6 +7,21 @@ set BACKEND_DIR=%ROOT_DIR%backend
 set FRONTEND_DIR=%ROOT_DIR%frontend
 set VENV_DIR=%BACKEND_DIR%\.venv
 set PYTHON=%VENV_DIR%\Scripts\python.exe
+set "REPAIR_NO_PIC_ON_STARTUP=0"
+
+:parse_args
+if "%~1"=="" goto :args_done
+if /I "%~1"=="--repair-no-pic" (
+  set "REPAIR_NO_PIC_ON_STARTUP=1"
+) else (
+  echo [error] Unknown argument: %~1
+  pause
+  exit /b 1
+)
+shift
+goto :parse_args
+
+:args_done
 
 where python >nul 2>nul
 if errorlevel 1 (
@@ -65,12 +80,13 @@ start "UnrealAssetExplorer Frontend" cmd /k "cd /d ""%FRONTEND_DIR%"" && call np
 echo [start] Starting backend (foreground)...
 cd /d "%BACKEND_DIR%"
 set ASSET_SERVER_HOST=127.0.0.1
-set ASSET_SERVER_PORT=8008
+set ASSET_SERVER_PORT=7985
 set ASSET_SERVER_LOG_LEVEL=info
 set ASSET_SERVER_RELOAD=1
 set ASSET_SERVER_CWD=%BACKEND_DIR%
-start "" cmd /c "timeout /t 2 /nobreak >nul && start \"\" \"http://localhost:8008\""
-call "%PYTHON%" -m uvicorn main:app --reload --host 127.0.0.1 --port 8008 --log-level info
+if "%REPAIR_NO_PIC_ON_STARTUP%"=="1" set ASSET_NO_PIC_REPAIR_ON_STARTUP=1
+start "" cmd /c "timeout /t 2 /nobreak >nul && start \"\" \"http://localhost:7985\""
+call "%PYTHON%" -m uvicorn main:app --reload --host 127.0.0.1 --port 7985 --log-level info
 
 echo Backend exited.
 pause
