@@ -74,7 +74,6 @@ def init_db() -> None:
             hash_full_blake3 TEXT,
             tags_json TEXT,
             meta_json TEXT,
-            embedding_json TEXT,
             images_json TEXT,
             thumb_image TEXT,
             detail_image TEXT,

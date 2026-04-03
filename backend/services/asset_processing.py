@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Tuple
 
 from PIL import Image
 
-IMAGE_EXTS = {".webp"}
+IMAGE_EXTS = {".png", ".webp"}
 THUMB_SIZE = 256
 DETAIL_SIZE = 512
 FULL_SIZE = 1024

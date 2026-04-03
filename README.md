@@ -7,7 +7,6 @@ It combines a FastAPI backend with a React frontend and adds workflows for:
 - preview images/screenshots
 - metadata and tag management
 - LLM/OpenAI-assisted tag generation and translation
-- semantic search (embeddings)
 - import/export/sync flows for UE asset packs
 
 ## Unreal Integration
@@ -31,7 +30,7 @@ Project creation recommendation:
 - Typical export calls are:
   - `aeb /Game/`
   - `aeb /Game/byHans1/MyPack/SM_Crate.SM_Crate`
-- This keeps `source_path` / `source_folder` mapping consistent and avoids duplicate/wrong project roots.
+- This keeps `project_root` / `source_folder` mapping consistent and avoids duplicate/wrong project roots.
 
 Deep resolve roots (important for vendor packs like `SUBURBS`, `DECALS`, ...):
 
@@ -99,7 +98,7 @@ start-dev.bat
 This starts:
 
 - Vite dev server for frontend
-- FastAPI backend with auto-reload on `127.0.0.1:8008`
+- FastAPI backend with auto-reload on `127.0.0.1:7985`
 
 ### 4) Optional: rebuild frontend bundle (Windows)
 
@@ -145,7 +144,6 @@ Global row:
 - `Open Source Folder`: open configured source folder on disk.
 - `Setcard`: generate or refresh `setcard.png` from project preview images.
 - `Re-export via UE Cmd`: run UnrealEditor-Cmd export flow, then reimport/sync.
-- `Rebuild semantic`: rebuild embeddings for project assets.
 
 LLM row (provider-dependent):
 
