@@ -529,6 +529,32 @@ body {
   color: #5e5e5e;
 }
 
+.asset-meta-source {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.source-domain-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #111827;
+  color: #f8fafc;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.source-domain-badge-inline {
+  flex: 0 0 auto;
+}
+
 .asset-style {
   font-size: 11px;
   text-transform: uppercase;
@@ -1072,6 +1098,11 @@ body {
   color: var(--text);
 }
 
+.settings-textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
 
 .export-image-grid {
   display: grid;
@@ -1215,6 +1246,14 @@ body {
   font-size: 15px;
   white-space: normal;
   word-break: break-word;
+}
+
+.project-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .project-list-header {

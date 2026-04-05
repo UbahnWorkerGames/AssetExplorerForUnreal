@@ -32,12 +32,12 @@ Project creation recommendation:
   - `aeb /Game/byHans1/MyPack/SM_Crate.SM_Crate`
 - This keeps `project_root` / `source_folder` mapping consistent and avoids duplicate/wrong project roots.
 
-Deep resolve roots (important for vendor packs like `SUBURBS`, `DECALS`, ...):
+Project path blacklist:
 
-- Setting: `export_resolve_deep_roots` (CSV) in UnrealAssetExplorer settings.
-- Default examples: `Dekogon_Industrial,SUBURBS,DECALS,BUILDINGS`
-- Behavior: if first folder under `Content/` matches this list, resolve one level deeper (or pick largest nested folder if multiple candidates exist).
-- Users should verify pack structure first and add missing root names to this CSV when needed.
+- Setting: `project_path_blacklist` in UnrealAssetExplorer settings.
+- Use it for source roots you manually confirmed as duplicates and want to skip on later imports.
+- One path per line or CSV entry is fine.
+- The importer skips matching project roots before creating a new project entry.
 
 ## Tech Stack
 

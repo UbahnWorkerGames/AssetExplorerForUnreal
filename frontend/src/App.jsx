@@ -171,6 +171,25 @@ function resolveApiUrl(path) {
   return `${API_BASE}${String(path).startsWith("/") ? path : `/${path}`}`;
 }
 
+function normalizeLinkDomain(link) {
+  const raw = String(link || "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw) ? raw : `https://${raw}`);
+    return url.hostname.replace(/^www\./i, "").toLowerCase();
+  } catch {
+    return raw.replace(/^www\./i, "").toLowerCase();
+  }
+}
+
+function getProjectLinkDomain(project) {
+  return normalizeLinkDomain(project?.link || "");
+}
+
+function getSourceDomainLabel(project) {
+  return getProjectLinkDomain(project) || "unknown";
+}
+
 function getProjectCoverUrl(project) {
   const explicit = resolveApiUrl(project?.screenshot_url);
   if (explicit) return explicit;
@@ -241,6 +260,7 @@ function AssetCard({ asset, project, onSelect, onContextMenu, tileSize, isSelect
   const classTag = String(asset?.meta?.class || asset?.type || "").trim();
   const hasClassTag = classTag && !topTags.some((tag) => String(tag || "").toLowerCase() === classTag.toLowerCase());
   const displayTags = hasClassTag ? [...topTags, classTag] : topTags;
+  const sourceDomain = getSourceDomainLabel(project);
   return (
     <button
       className={`asset-card${isSelected ? " selected" : ""}`}
@@ -264,8 +284,13 @@ function AssetCard({ asset, project, onSelect, onContextMenu, tileSize, isSelect
       </div>
       <div className="asset-body">
         <div className="asset-title">{displayName}</div>
-        <div className="asset-meta">
-          {project?.name || "Unassigned"}
+        <div className="asset-meta asset-meta-source">
+          <span>{project?.name || "Unassigned"}</span>
+          {sourceDomain && sourceDomain !== "unknown" && (
+            <span className="source-domain-badge" title={project?.link || sourceDomain}>
+              {sourceDomain}
+            </span>
+          )}
         </div>
         {project?.art_style && <div className="asset-style">{project.art_style}</div>}
         {project?.project_era && <div className="asset-era">{project.project_era}</div>}
@@ -304,6 +329,7 @@ export default function App() {
   const [assets, setAssets] = useState([]);
   const [queryInput, setQueryInput] = useState("");
   const [selectedProjects, setSelectedProjects] = useState([]);
+  const [selectedSourceDomains, setSelectedSourceDomains] = useState([]);
   const [assetTypes, setAssetTypes] = useState([]);
   const [selectedTypes, setSelectedTypes] = useState([]);
   const [page, setPage] = useState(1);
@@ -652,7 +678,7 @@ export default function App() {
     ollama_model: "",
     import_base_url: "http://127.0.0.1:9090",
     server_mode_enabled: false,
-    skip_export_if_on_server: true,
+    skip_export_if_on_server: false,
     export_overwrite_zips: false,
     export_default_image_count: 1,
     export_static_mesh_image_count: 1,
@@ -664,9 +690,9 @@ export default function App() {
     export_capture360_discard_frames: 2,
     export_upload_after_export: true,
     export_skip_preview_images: false,
-    export_resolve_deep_roots: "Dekogon_Industrial,SUBURBS,DECALS,BUILDINGS",
     export_upload_path_template: "/assets/upload",
     export_check_path_template: "/assets/exists?hash={hash}&hash_type=blake3&source_path={source_path}",
+    project_path_blacklist: "",
     ue_cmd_path: "",
     ue_cmd_extra_args: "",
     tag_language: "english",
@@ -1015,17 +1041,60 @@ export default function App() {
     projects.forEach((project) => map.set(project.id, project));
     return map;
   }, [projects]);
+  const projectSourceDomains = useMemo(() => {
+    const set = new Set();
+    projects.forEach((project) => {
+      const domain = getProjectLinkDomain(project);
+      if (domain) {
+        set.add(domain);
+      }
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+  }, [projects]);
   const uniqueSelectedProjects = useMemo(
     () => Array.from(new Set(selectedProjects)),
     [selectedProjects]
   );
+  const uniqueSelectedSourceDomains = useMemo(
+    () => Array.from(new Set(selectedSourceDomains)),
+    [selectedSourceDomains]
+  );
   const projectFiltersActive =
     uniqueSelectedProjects.length > 0 && uniqueSelectedProjects.length < projects.length;
+  const sourceDomainFiltersActive =
+    uniqueSelectedSourceDomains.length > 0 &&
+    uniqueSelectedSourceDomains.length < projectSourceDomains.length;
+  useEffect(() => {
+    if (!selectedSourceDomains.length) return;
+    const allowed = new Set(projectSourceDomains);
+    const next = selectedSourceDomains.filter((domain) => allowed.has(domain));
+    if (next.length !== selectedSourceDomains.length) {
+      setSelectedSourceDomains(next);
+    }
+  }, [projectSourceDomains, selectedSourceDomains]);
   const visibleAssets = useMemo(() => {
-    if (!projectFiltersActive) return assets;
-    const allowed = new Set(uniqueSelectedProjects.map((id) => String(id)));
-    return assets.filter((asset) => allowed.has(String(asset.project_id)));
-  }, [assets, projectFiltersActive, uniqueSelectedProjects]);
+    if (!projectFiltersActive && !sourceDomainFiltersActive) return assets;
+    const allowedProjects = projectFiltersActive
+      ? new Set(uniqueSelectedProjects.map((id) => String(id)))
+      : null;
+    const allowedDomains = sourceDomainFiltersActive ? new Set(uniqueSelectedSourceDomains) : null;
+    return assets.filter((asset) => {
+      if (allowedProjects && !allowedProjects.has(String(asset.project_id))) return false;
+      if (allowedDomains) {
+        const project = projectMap.get(asset.project_id);
+        const domain = getProjectLinkDomain(project);
+        if (!domain || !allowedDomains.has(domain)) return false;
+      }
+      return true;
+    });
+  }, [
+    assets,
+    projectFiltersActive,
+    sourceDomainFiltersActive,
+    uniqueSelectedProjects,
+    uniqueSelectedSourceDomains,
+    projectMap,
+  ]);
   function useDebounce(value, delayMs) {
     const [debounced, setDebounced] = useState(value);
     useEffect(() => {
@@ -1041,6 +1110,9 @@ export default function App() {
     const typeFiltersActive = selectedTypes.length && selectedTypes.length !== assetTypes.length;
     const styleFiltersActive = selectedArtStyles.length && selectedArtStyles.length < 3;
     const eraFiltersActive = selectedEras.length && selectedEras.length < eraOptions.length;
+    const sourceDomainFiltersActive =
+      uniqueSelectedSourceDomains.length > 0 &&
+      uniqueSelectedSourceDomains.length < projectSourceDomains.length;
     const filteredProjectIds = uniqueSelectedProjects.filter((projectId) => {
       const project = projects.find((item) => String(item.id) === projectId);
       if (styleFiltersActive) {
@@ -1051,11 +1123,14 @@ export default function App() {
         const era = String(project?.project_era || "").trim().toLowerCase();
         if (era && !selectedEras.includes(era)) return false;
       }
+      if (sourceDomainFiltersActive) {
+        const domain = getProjectLinkDomain(project);
+        if (!domain || !uniqueSelectedSourceDomains.includes(domain)) return false;
+      }
       return true;
     });
-    const allProjectsSelected =
-      projects.length > 0 && uniqueSelectedProjects.length >= projects.length;
-    const useProjectFilter = projectFiltersActive || styleFiltersActive || eraFiltersActive;
+    const useProjectFilter =
+      projectFiltersActive || styleFiltersActive || eraFiltersActive || sourceDomainFiltersActive;
     return {
       query: trimmedQuery || undefined,
       project_ids:
@@ -1078,15 +1153,20 @@ export default function App() {
     eraOptions.length,
     assetTypes.length,
     projects,
+    uniqueSelectedSourceDomains,
+    projectSourceDomains.length,
     page,
     pageSize,
     naniteFilter,
     collisionFilter,
-  ]);
+  ]); 
   const statsParams = useMemo(() => {
     const typeFiltersActive = selectedTypes.length && selectedTypes.length !== assetTypes.length;
     const styleFiltersActive = selectedArtStyles.length && selectedArtStyles.length < 3;
     const eraFiltersActive = selectedEras.length && selectedEras.length < eraOptions.length;
+    const sourceDomainFiltersActive =
+      uniqueSelectedSourceDomains.length > 0 &&
+      uniqueSelectedSourceDomains.length < projectSourceDomains.length;
     const filteredProjectIds = uniqueSelectedProjects.filter((projectId) => {
       const project = projects.find((item) => String(item.id) === projectId);
       if (styleFiltersActive) {
@@ -1097,11 +1177,16 @@ export default function App() {
         const era = String(project?.project_era || "").trim().toLowerCase();
         if (era && !selectedEras.includes(era)) return false;
       }
+      if (sourceDomainFiltersActive) {
+        const domain = getProjectLinkDomain(project);
+        if (!domain || !uniqueSelectedSourceDomains.includes(domain)) return false;
+      }
       return true;
     });
     const projectFiltersActive =
       uniqueSelectedProjects.length > 0 && uniqueSelectedProjects.length < projects.length;
-    const useProjectFilter = projectFiltersActive || styleFiltersActive || eraFiltersActive;
+    const useProjectFilter =
+      projectFiltersActive || styleFiltersActive || eraFiltersActive || sourceDomainFiltersActive;
     return {
       query: trimmedQuery || undefined,
       tag: undefined,
@@ -1124,6 +1209,8 @@ export default function App() {
     eraOptions.length,
     uniqueSelectedProjects,
     projects,
+    uniqueSelectedSourceDomains,
+    projectSourceDomains.length,
     refreshKey,
   ]);
   useEffect(() => {
@@ -1177,6 +1264,11 @@ export default function App() {
       if (clean.skip_export_if_on_server !== undefined) {
         const raw = String(clean.skip_export_if_on_server).toLowerCase();
         clean.skip_export_if_on_server = raw === "true" || raw === "1" || raw === "yes" || raw === "on";
+      }
+      if (clean.project_path_blacklist === undefined || clean.project_path_blacklist === null) {
+        clean.project_path_blacklist = "";
+      } else {
+        clean.project_path_blacklist = String(clean.project_path_blacklist);
       }
       if (clean.export_skip_preview_images !== undefined) {
         const raw = String(clean.export_skip_preview_images).toLowerCase();
@@ -1537,13 +1629,27 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [selectedAssetId, view, selectedIndex, visibleAssets, isLoadingMore, totalCount, page]);
   useEffect(() => {
-    if (!projectFiltersActive) return;
+    if (!projectFiltersActive && !sourceDomainFiltersActive) return;
     if (!selectedAssetId) return;
-    const allowed = new Set(selectedProjects.map((id) => String(id)));
-    if (!allowed.has(String(selectedAsset?.project_id || ""))) {
+    const project = projectMap.get(selectedAsset?.project_id);
+    const allowedProjects = projectFiltersActive ? new Set(selectedProjects.map((id) => String(id))) : null;
+    const allowedDomains = sourceDomainFiltersActive ? new Set(uniqueSelectedSourceDomains) : null;
+    const projectDomain = getProjectLinkDomain(project);
+    const projectAllowed =
+      (!allowedProjects || allowedProjects.has(String(selectedAsset?.project_id || ""))) &&
+      (!allowedDomains || (projectDomain && allowedDomains.has(projectDomain)));
+    if (!projectAllowed) {
       closeDetail();
     }
-  }, [projectFiltersActive, selectedProjects, selectedAssetId, selectedAsset]);
+  }, [
+    projectFiltersActive,
+    sourceDomainFiltersActive,
+    selectedProjects,
+    uniqueSelectedSourceDomains,
+    selectedAssetId,
+    selectedAsset,
+    projectMap,
+  ]);
   useEffect(() => {
     if (view !== "assets" || selectedAssetId || !hasMore) return;
     const target = loadMoreRef.current;
@@ -1770,6 +1876,7 @@ export default function App() {
       query: queryInput,
       tag: "",
       selectedProjects,
+      selectedSourceDomains,
       selectedTypes,
       selectedArtStyles,
       selectedEras,
@@ -1788,6 +1895,7 @@ export default function App() {
       setQueryInput(view.tag);
     }
     setSelectedProjects(view.selectedProjects || []);
+    setSelectedSourceDomains(view.selectedSourceDomains || []);
     setSelectedTypes(view.selectedTypes || []);
     setSelectedArtStyles(view.selectedArtStyles || ["regular", "stylized", "low poly"]);
     setSelectedEras(view.selectedEras || eraOptions);
@@ -2321,6 +2429,7 @@ export default function App() {
       if (payload.skip_export_if_on_server !== undefined) {
         payload.skip_export_if_on_server = payload.skip_export_if_on_server ? "true" : "false";
       }
+      payload.project_path_blacklist = String(payload.project_path_blacklist || "").trim();
       if (payload.server_mode_enabled !== undefined) {
         payload.server_mode_enabled = payload.server_mode_enabled ? "true" : "false";
       }
@@ -2874,6 +2983,23 @@ function formatSizeGb(bytes) {
         return prev.filter((item) => item !== value);
       }
       return [...prev, value];
+    });
+    resetPaging(true, true);
+  }
+  function toggleAllSourceDomains(checked) {
+    if (checked) {
+      setSelectedSourceDomains(projectSourceDomains.slice());
+    } else {
+      setSelectedSourceDomains([]);
+    }
+    resetPaging(true, true);
+  }
+  function toggleSourceDomain(domain) {
+    setSelectedSourceDomains((prev) => {
+      if (prev.includes(domain)) {
+        return prev.filter((item) => item !== domain);
+      }
+      return [...prev, domain];
     });
     resetPaging(true, true);
   }
@@ -3456,6 +3582,11 @@ function formatSizeGb(bytes) {
                                 <span className="project-filter-name" style={{ maxWidth: `${projectNameWrap}ch` }}>
                                   #{project.id} {project.name}
                                 </span>
+                                {getProjectLinkDomain(project) && (
+                                  <span className="source-domain-badge source-domain-badge-inline">
+                                    {getProjectLinkDomain(project)}
+                                  </span>
+                                )}
                                 <span className="filter-meta">
                                   {projectStats[project.id]?.matched ?? 0}/{projectStats[project.id]?.total ?? 0}
                                 </span>
@@ -3465,6 +3596,36 @@ function formatSizeGb(bytes) {
                       </div>
                     </>
                   )}
+                </div>
+                <div className="filter-group">
+                  <div className="filter-label">Source domain</div>
+                  <label className="filter-item">
+                    <input
+                      type="checkbox"
+                      checked={
+                        selectedSourceDomains.length === projectSourceDomains.length &&
+                        projectSourceDomains.length > 0
+                      }
+                      onChange={(e) => toggleAllSourceDomains(e.target.checked)}
+                    />
+                    Toggle all
+                  </label>
+                  <div className="filter-list">
+                    {projectSourceDomains.length ? (
+                      projectSourceDomains.map((domain) => (
+                        <label key={domain} className="filter-item">
+                          <input
+                            type="checkbox"
+                            checked={selectedSourceDomains.includes(domain)}
+                            onChange={() => toggleSourceDomain(domain)}
+                          />
+                          <span className="source-domain-badge">{domain}</span>
+                        </label>
+                      ))
+                    ) : (
+                      <div className="asset-count">No source domains found</div>
+                    )}
+                  </div>
                 </div>
                   <div className="filter-group">
                   <button
@@ -4221,7 +4382,14 @@ function formatSizeGb(bytes) {
                               )}
                             </div>
                             <div className="card-body project-body">
-                              <h3 className="project-title">#{project.id} {project.name || "-"}</h3>
+                              <div className="project-title-row">
+                                <h3 className="project-title">#{project.id} {project.name || "-"}</h3>
+                                {getProjectLinkDomain(project) && (
+                                  <span className="source-domain-badge" title={project.link || getProjectLinkDomain(project)}>
+                                    {getProjectLinkDomain(project)}
+                                  </span>
+                                )}
+                              </div>
                               <div className="project-meta">
                                 <span className="project-meta-label">Link</span>
                                 {project.link ? (
@@ -4864,21 +5032,21 @@ function formatSizeGb(bytes) {
                   </div>
                   <div className="settings-compact-item">
                     <div className="form-row">
-                      <label className="form-label">Deep resolve roots (CSV)</label>
-                      <input
-                        className="form-control"
-                        placeholder="SUBURBS,ENV,MEGASCANS"
-                        title="Top folders where server resolve should use Content/<Top>/<Pack> instead of only <Top>."
-                        value={settings.export_resolve_deep_roots || ""}
+                      <label className="form-label">Project path blacklist</label>
+                      <textarea
+                        className="form-control settings-textarea"
+                        rows={4}
+                        placeholder="C:/assets/duplicate/project&#10;D:/cosmos/duplicate/root"
+                        title="Paths listed here are skipped during project import and auto-create when they match the incoming source path."
+                        value={settings.project_path_blacklist || ""}
                         onChange={(e) =>
-                          setSettings((prev) => ({ ...prev, export_resolve_deep_roots: e.target.value }))
+                          setSettings((prev) => ({ ...prev, project_path_blacklist: e.target.value }))
                         }
                       />
                     </div>
                   </div>
                 </div>
               </div>
-              {/* Hidden advanced paths: kept in settings payload, not shown in UI */}
               <div className="settings-compact-group">
                 <div className="settings-compact-title">Capture + tag tuning</div>
                 <div className="export-image-grid">

@@ -95,7 +95,6 @@ STARTUP_IMPORT_STATUS: Dict[str, Any] = {
     "finished_at": None,
 }
 PROJECT_DIR_SOURCE_MIN_BYTES = 50 * 1024 * 1024
-DEFAULT_DEEP_RESOLVE_ROOTS_CSV = "Dekogon_Industrial,SUBURBS,DECALS,BUILDINGS"
 
 _event_queues: List["queue.Queue[str]"] = []
 _event_lock = threading.Lock()
@@ -2035,7 +2034,6 @@ class SettingsUpdate(BaseModel):
     export_upload_after_export: Optional[bool] = None
     export_skip_preview_images: Optional[bool] = None
     server_mode_enabled: Optional[bool] = None
-    export_resolve_deep_roots: Optional[str] = None
     export_upload_path_template: Optional[str] = None
     export_check_path_template: Optional[str] = None
     skip_export_if_on_server: Optional[bool] = None
@@ -2069,6 +2067,7 @@ class SettingsUpdate(BaseModel):
     setcard_exclude_types: Optional[str] = None
     default_full_project_copy: Optional[bool] = None
     sidebar_width: Optional[int] = None
+    project_path_blacklist: Optional[str] = None
     purge_assets_on_startup: Optional[bool] = None
     use_temperature: Optional[bool] = None
     temperature: Optional[float] = None
@@ -5197,7 +5196,7 @@ def _strip_no_pic_tags(tags: List[str]) -> List[str]:
         if not value:
             continue
         key = re.sub(r"[\s_-]+", "", value.lower())
-        if key == "nopic":
+        if key in {"nopic", "noimage", "noimg"}:
             continue
         if value not in cleaned:
             cleaned.append(value)
@@ -5208,9 +5207,15 @@ def _asset_has_hash_preview(asset_dir: str, hash_main: str) -> bool:
     candidates: List[Path] = []
     normalized_dir = str(asset_dir or "").strip().replace("\\", "/")
     if normalized_dir:
-        candidates.append(ASSETS_DIR / normalized_dir)
+        rel_dir = Path(normalized_dir)
+        if rel_dir.is_absolute():
+            candidates.append(rel_dir)
+        else:
+            candidates.append(ASSETS_DIR / rel_dir)
+            candidates.append(BASE_DIR / "data" / "assets" / rel_dir)
     if hash_main:
         candidates.append(ASSETS_DIR / hash_main[:3] / hash_main)
+        candidates.append(BASE_DIR / "data" / "assets" / hash_main[:3] / hash_main)
 
     seen = set()
     for asset_root in candidates:
@@ -5220,6 +5225,8 @@ def _asset_has_hash_preview(asset_dir: str, hash_main: str) -> bool:
         seen.add(key)
         if not asset_root.exists() or not hash_main:
             continue
+        if (asset_root / f"{hash_main}_t.webp").exists():
+            return True
         for suffix in ("_t.webp", "_d.webp", "_f.webp", "_ta.webp", "_da.webp"):
             if (asset_root / f"{hash_main}{suffix}").exists():
                 return True
@@ -5227,6 +5234,65 @@ def _asset_has_hash_preview(asset_dir: str, hash_main: str) -> bool:
             if match.is_file():
                 return True
     return False
+
+
+def _asset_preview_files_from_disk(asset_dir: str, hash_main: str) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "images_json": [],
+        "thumb_image": "",
+        "detail_image": "",
+        "full_image": "",
+        "anim_thumb": "",
+        "anim_detail": "",
+    }
+    normalized_dir = str(asset_dir or "").strip().replace("\\", "/")
+    candidates: List[Path] = []
+    if normalized_dir:
+        rel_dir = Path(normalized_dir)
+        if rel_dir.is_absolute():
+            candidates.append(rel_dir)
+        else:
+            candidates.append(ASSETS_DIR / rel_dir)
+            candidates.append(BASE_DIR / "data" / "assets" / rel_dir)
+    if hash_main:
+        candidates.append(ASSETS_DIR / hash_main[:3] / hash_main)
+        candidates.append(BASE_DIR / "data" / "assets" / hash_main[:3] / hash_main)
+
+    seen = set()
+    for asset_root in candidates:
+        key = str(asset_root)
+        if key in seen:
+            continue
+        seen.add(key)
+        if not asset_root.exists() or not hash_main:
+            continue
+        thumb = asset_root / f"{hash_main}_t.webp"
+        detail = asset_root / f"{hash_main}_d.webp"
+        full = asset_root / f"{hash_main}_f.webp"
+        anim_thumb = asset_root / f"{hash_main}_ta.webp"
+        anim_detail = asset_root / f"{hash_main}_da.webp"
+        if thumb.exists():
+            result["thumb_image"] = thumb.name
+            result["images_json"].append(thumb.name)
+        if detail.exists():
+            result["detail_image"] = detail.name
+            if detail.name not in result["images_json"]:
+                result["images_json"].append(detail.name)
+        if full.exists():
+            result["full_image"] = full.name
+            if full.name not in result["images_json"]:
+                result["images_json"].append(full.name)
+        if anim_thumb.exists():
+            result["anim_thumb"] = anim_thumb.name
+            if anim_thumb.name not in result["images_json"]:
+                result["images_json"].append(anim_thumb.name)
+        if anim_detail.exists():
+            result["anim_detail"] = anim_detail.name
+            if anim_detail.name not in result["images_json"]:
+                result["images_json"].append(anim_detail.name)
+        if result["thumb_image"]:
+            break
+    return result
 
 
 def _merge_tags_for_asset(tags: List[str], translated_tags: List[str]) -> List[str]:
@@ -6116,6 +6182,10 @@ def resolve_project(project_root: Optional[str] = None, source_path: Optional[st
         ]
         if target in candidates:
             return {"project_id": row["id"]}
+    if _is_project_path_blacklisted(settings, source_input, None):
+        logger.info("Project resolve skipped by blacklist: source=%s", source_input)
+        conn.close()
+        return {"project_id": None, "skipped": True, "blacklisted": True}
     if auto_create:
         resolved = _resolve_source_paths(source_input, None)
         project_root = resolved.get("project_root")
@@ -7291,8 +7361,6 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
         masked["ue_cmd_path"] = ""
     if "server_mode_enabled" not in masked:
         masked["server_mode_enabled"] = "false"
-    if "export_resolve_deep_roots" not in masked or not str(masked.get("export_resolve_deep_roots") or "").strip():
-        masked["export_resolve_deep_roots"] = DEFAULT_DEEP_RESOLVE_ROOTS_CSV
     default_export_check = "/assets/exists?hash={hash}&hash_type=blake3&source_path={source_path}"
     current_export_check = str(masked.get("export_check_path_template") or "").strip()
     if not current_export_check or current_export_check in {"/assets/exists?hash={hash}&hash_type=blake3", "/assets/exists?hash={hash}&hash_type=blake3&project_id={project_id}"}:
@@ -7300,6 +7368,8 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
     if "skip_export_if_on_server" in masked:
         raw = str(masked.get("skip_export_if_on_server") or "").strip().lower()
         masked["skip_export_if_on_server"] = raw in {"1", "true", "yes", "on"}
+    else:
+        masked["skip_export_if_on_server"] = False
     if "export_overwrite_zips" in masked:
         raw = str(masked.get("export_overwrite_zips") or "").strip().lower()
         masked["export_overwrite_zips"] = "true" if raw in {"1", "true", "yes", "on"} else "false"
@@ -7363,6 +7433,8 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
     if "sidebar_width" in masked:
         raw = str(masked.get("sidebar_width") or "").strip()
         masked["sidebar_width"] = raw if raw.isdigit() else ""
+    if "project_path_blacklist" not in masked:
+        masked["project_path_blacklist"] = ""
     if "export_exclude_types" not in masked:
         masked["export_exclude_types"] = "Material,MaterialInstance,MaterialInstanceConstant"
     if "api_key" in masked:
@@ -7694,6 +7766,26 @@ def _upload_asset_sync(
             logger.exception("Upload rejected: process_asset_zip failed (file=%s)", file.filename)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+        has_preview = bool(thumb_image or detail_image or full_image or anim_thumb or anim_detail or preview_files)
+        if not has_preview:
+            disk_previews = _asset_preview_files_from_disk(str(asset_dir), hash_main)
+            has_preview = bool(disk_previews.get("thumb_image"))
+            if has_preview:
+                preview_files = disk_previews["images_json"]
+                thumb_image = disk_previews["thumb_image"]
+                detail_image = disk_previews["detail_image"]
+                full_image = disk_previews["full_image"]
+                anim_thumb = disk_previews["anim_thumb"]
+                anim_detail = disk_previews["anim_detail"]
+        tags = meta.get("tags") or []
+        if isinstance(tags, str):
+            tags = [t.strip() for t in tags.split(",") if t.strip()]
+        tags = _normalize_tags(tags)
+        if has_preview:
+            tags = _strip_no_pic_tags(tags)
+            meta["tags"] = tags
+        translated_tags = _translate_tags_if_enabled(settings, tags)
+        merged_tags = _merge_tags_for_asset(tags, translated_tags)
         size_bytes = int(meta.get("disk_bytes_total") or 0)
         if size_bytes <= 0:
             size_bytes = int(existing.get("size_bytes") or 0)
@@ -7704,7 +7796,7 @@ def _upload_asset_sync(
             """
             UPDATE assets
             SET images_json = ?, thumb_image = ?, detail_image = ?, full_image = ?,
-                anim_thumb = ?, anim_detail = ?, meta_json = ?, size_bytes = ?
+                anim_thumb = ?, anim_detail = ?, meta_json = ?, tags_json = ?, size_bytes = ?
             WHERE id = ?
             """,
             (
@@ -7715,10 +7807,21 @@ def _upload_asset_sync(
                 anim_thumb,
                 anim_detail,
                 json.dumps(meta),
+                json.dumps(merged_tags),
                 size_bytes,
                 existing["id"],
             ),
         )
+        _db_retry(lambda: _upsert_asset_tags(
+            write_conn,
+            existing["id"],
+            hash_main,
+            hash_full,
+            now_iso(),
+            tags,
+            translated_tags,
+            settings.get("tag_language") or "",
+        ))
         _db_retry(write_conn.commit)
         if server_mode_enabled and project_id and int(deployed_content_files or 0) > 0:
             _set_project_internal_source(write_conn, int(project_id))
@@ -7749,6 +7852,17 @@ def _upload_asset_sync(
         logger.exception("Upload rejected: process_asset_zip failed (file=%s)", file.filename)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    has_preview = bool(thumb_image or detail_image or full_image or anim_thumb or anim_detail or preview_files)
+    if not has_preview:
+        disk_previews = _asset_preview_files_from_disk(str(asset_dir), hash_main)
+        has_preview = bool(disk_previews.get("thumb_image"))
+        if has_preview:
+            preview_files = disk_previews["images_json"]
+            thumb_image = disk_previews["thumb_image"]
+            detail_image = disk_previews["detail_image"]
+            full_image = disk_previews["full_image"]
+            anim_thumb = disk_previews["anim_thumb"]
+            anim_detail = disk_previews["anim_detail"]
     package = meta.get("package") or ""
     name = package.split("/")[-1] if package else Path(file.filename).stem
     description = meta.get("description") or ""
@@ -7759,6 +7873,9 @@ def _upload_asset_sync(
     if isinstance(tags, str):
         tags = [t.strip() for t in tags.split(",") if t.strip()]
     tags = _normalize_tags(tags)
+    if has_preview:
+        tags = _strip_no_pic_tags(tags)
+        meta["tags"] = tags
     size_bytes = int(meta.get("disk_bytes_total") or 0)
 
     write_conn = get_db()
@@ -7833,10 +7950,38 @@ def _parse_csv_list(value: Optional[str]) -> List[str]:
 
 
 def _deep_roots_from_settings(settings: Dict[str, Any]) -> set[str]:
-    raw = settings.get("export_resolve_deep_roots")
+    return set()
+
+
+def _project_path_blacklist_from_settings(settings: Dict[str, Any]) -> set[str]:
+    raw = settings.get("project_path_blacklist")
     if not str(raw or "").strip():
-        raw = DEFAULT_DEEP_RESOLVE_ROOTS_CSV
-    return {v.strip().lower() for v in _parse_csv_list(str(raw)) if v.strip()}
+        return set()
+    return {_normalize_path_value(entry) for entry in _parse_csv_list(str(raw)) if _normalize_path_value(entry)}
+
+
+def _is_project_path_blacklisted(
+    settings: Dict[str, Any],
+    source_path: Optional[str],
+    source_folder: Optional[str] = None,
+) -> bool:
+    blacklist = _project_path_blacklist_from_settings(settings)
+    if not blacklist:
+        return False
+    candidates = {
+        _normalize_path_value(source_path),
+        _normalize_path_value(source_folder),
+    }
+    resolved = _resolve_source_paths(source_path, source_folder)
+    project_root = resolved.get("project_root")
+    if project_root:
+        candidates.add(_normalize_path_value(str(project_root)))
+    source_folder_path = resolved.get("source_folder")
+    if source_folder_path:
+        candidates.add(_normalize_path_value(str(source_folder_path)))
+    candidates.add(_normalize_source_root_value(source_path))
+    candidates.add(_normalize_source_root_value(source_folder))
+    return any(candidate and candidate in blacklist for candidate in candidates)
 
 
 def _set_project_internal_source(conn: sqlite3.Connection, project_id: int) -> None:
@@ -7949,6 +8094,7 @@ def _run_projects_import_task(task_id: int) -> None:
     pending_progress: Optional[int] = None
     conn = get_db()
     cur = conn.cursor()
+    settings = get_settings(conn)
 
     with path.open("r", encoding="utf-8", errors="ignore") as fh:
         reader = csv.DictReader(fh)
@@ -7976,6 +8122,10 @@ def _run_projects_import_task(task_id: int) -> None:
                 source_preference = _normalize_source_preference((row.get("source_preference") or "").strip(), "external")
                 tags_value = (row.get("tags") or "").strip()
                 tags = [t.strip() for t in tags_value.split(",") if t.strip()]
+
+                if _is_project_path_blacklisted(settings, source_path, source_folder):
+                    skipped += 1
+                    continue
 
                 existing = _find_project_by_root(conn, source_path, source_folder)
                 if existing:
