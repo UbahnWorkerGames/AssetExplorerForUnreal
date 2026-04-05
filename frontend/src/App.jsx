@@ -73,6 +73,7 @@ Name: {name}
 Class: {asset_class}
 Description: {description}
 Existing tags: {existing_tags}`;
+const DEFAULT_UE_CMD_PATH = "I:/epic/UE_5.7/Engine/Binaries/Win64/UnrealEditor-Cmd.exe";
 const LIVE_CONSOLE_MAX_LINES = 500;
 const isTrue = (value) => String(value).toLowerCase() === "true" || value === true;
 const taskLabelMap = {
@@ -2784,7 +2785,8 @@ export default function App() {
   }
   async function handleRunExportCmd(project) {
     try {
-      if (!settings.ue_cmd_path) {
+      const ueCmdPath = String(settings.ue_cmd_path || DEFAULT_UE_CMD_PATH).trim();
+      if (!ueCmdPath) {
         toast.error("Set Unreal command path in Settings");
         return;
       }
@@ -2796,6 +2798,41 @@ export default function App() {
     } catch (err) {
       console.error(err);
       toast.error(`Export command failed: ${err.message || "unknown error"}`);
+    }
+  }
+  async function handleDeleteProjectAndBlacklist(project) {
+    const sourceRoot = String(project?.project_root || project?.source_path || "").trim();
+    if (!sourceRoot) {
+      toast.error("Project has no source path to blacklist");
+      return;
+    }
+    const confirmLabel = project?.name ? `Delete ${project.name} and blacklist its source path?` : "Delete project and blacklist its source path?";
+    if (!window.confirm(confirmLabel)) return;
+    try {
+      const current = String(settings.project_path_blacklist || "").trim();
+      const entries = current
+        ? current
+            .replace(/;/g, ",")
+            .replace(/\r\n/g, "\n")
+            .replace(/\r/g, "\n")
+            .split(/[\n,]/)
+            .map((entry) => entry.trim())
+            .filter(Boolean)
+        : [];
+      if (!entries.includes(sourceRoot)) {
+        entries.push(sourceRoot);
+      }
+      await updateSettings({ project_path_blacklist: entries.join("\n") });
+      await deleteProject(project.id);
+      const fresh = await fetchProjects();
+      setProjects(fresh);
+      setSelectedProjects(fresh.map((item) => String(item.id)));
+      setSettings((prev) => ({ ...prev, project_path_blacklist: entries.join("\n") }));
+      resetPaging(true, true);
+      toast.info("Project deleted and source path blacklisted");
+    } catch (err) {
+      console.error(err);
+      toast.error(`Delete + blacklist failed: ${err.message || "unknown error"}`);
     }
   }
   async function handleExportTags() {
@@ -4597,6 +4634,13 @@ function formatSizeGb(bytes) {
                                     title="Delete all assets from the database for this project. Project files on disk are kept."
                                   >
                                     Delete assets
+                                  </button>
+                                  <button
+                                    className="btn btn-outline-warning btn-sm"
+                                    onClick={() => handleDeleteProjectAndBlacklist(project)}
+                                    title="Delete the project, its assets, and add the source path to the blacklist."
+                                  >
+                                    Delete + blacklist
                                   </button>
                                   <button className="btn btn-outline-danger btn-sm" onClick={() => handleDeleteProject(project.id)} title="Delete project and all its assets from the database. Files on disk are kept.">
                                     Delete project

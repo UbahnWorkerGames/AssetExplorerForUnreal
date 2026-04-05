@@ -95,6 +95,7 @@ STARTUP_IMPORT_STATUS: Dict[str, Any] = {
     "finished_at": None,
 }
 PROJECT_DIR_SOURCE_MIN_BYTES = 50 * 1024 * 1024
+DEFAULT_UE_CMD_PATH = "I:/epic/UE_5.7/Engine/Binaries/Win64/UnrealEditor-Cmd.exe"
 
 _event_queues: List["queue.Queue[str]"] = []
 _event_lock = threading.Lock()
@@ -6777,7 +6778,7 @@ def run_project_export_cmd(project_id: int, payload: ProjectExportCmd) -> Dict[s
     _normalize_project_folder_for_project(conn, project)
     conn.close()
 
-    ue_cmd = (settings.get("ue_cmd_path") or "").strip()
+    ue_cmd = (settings.get("ue_cmd_path") or DEFAULT_UE_CMD_PATH).strip()
     if not ue_cmd:
         raise HTTPException(status_code=400, detail="ue_cmd_path is not configured")
 
@@ -7357,8 +7358,8 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
     masked = {**settings}
     if "import_base_url" not in masked:
         masked["import_base_url"] = "http://127.0.0.1:9090"
-    if "ue_cmd_path" not in masked:
-        masked["ue_cmd_path"] = ""
+    if "ue_cmd_path" not in masked or not str(masked.get("ue_cmd_path") or "").strip():
+        masked["ue_cmd_path"] = DEFAULT_UE_CMD_PATH
     if "server_mode_enabled" not in masked:
         masked["server_mode_enabled"] = "false"
     default_export_check = "/assets/exists?hash={hash}&hash_type=blake3&source_path={source_path}"
