@@ -288,7 +288,7 @@ function AssetCard({ asset, project, onSelect, onContextMenu, tileSize, isSelect
         <div className="asset-meta asset-meta-source">
           <span>{project?.name || "Unassigned"}</span>
           {sourceDomain && sourceDomain !== "unknown" && (
-            <span className="source-domain-badge" title={project?.link || sourceDomain}>
+            <span className="asset-source-domain" title={project?.link || sourceDomain}>
               {sourceDomain}
             </span>
           )}
@@ -592,6 +592,15 @@ export default function App() {
         const ai = Number(a.id || 0);
         const bi = Number(b.id || 0);
         return (ai - bi) * dir;
+      }
+      if (projectSortKey === "link_domain") {
+        const ad = getProjectLinkDomain(a) || "unknown";
+        const bd = getProjectLinkDomain(b) || "unknown";
+        const domainCompare = ad.localeCompare(bd, undefined, { numeric: true, sensitivity: "base" });
+        if (domainCompare !== 0) return domainCompare * dir;
+        const an = String(a.name || "");
+        const bn = String(b.name || "");
+        return an.localeCompare(bn, undefined, { numeric: true, sensitivity: "base" }) * dir;
       }
       if (projectSortKey === "source_folder") {
         const af = String(a.source_folder || a.folder_path || "");
@@ -3680,7 +3689,7 @@ function formatSizeGb(bytes) {
                             checked={selectedSourceDomains.includes(domain)}
                             onChange={() => toggleSourceDomain(domain)}
                           />
-                          <span className="source-domain-badge">{domain}</span>
+                          <span className="asset-source-domain">{domain}</span>
                         </label>
                       ))
                     ) : (
@@ -4284,16 +4293,17 @@ function formatSizeGb(bytes) {
                       />
                       <span className="form-check-label">Tags incomplete</span>
                     </label>
-                    <select
-                      className="form-select form-select-sm project-filter-select"
-                      value={projectSortKey}
-                      onChange={(e) => setProjectSortKey(e.target.value)}
-                    >
-                      <option value="name">Sort: Name</option>
-                      <option value="id">Sort: ID</option>
-                      <option value="source_folder">Sort: Source pack folder</option>
-                      <option value="size">Sort: Active size</option>
-                    </select>
+                      <select
+                        className="form-select form-select-sm project-filter-select"
+                        value={projectSortKey}
+                        onChange={(e) => setProjectSortKey(e.target.value)}
+                      >
+                        <option value="name">Sort: Name</option>
+                        <option value="id">Sort: ID</option>
+                        <option value="link_domain">Sort: Anbieter / Link</option>
+                        <option value="source_folder">Sort: Source pack folder</option>
+                        <option value="size">Sort: Active size</option>
+                      </select>
                     <button
                       className="btn btn-outline-dark btn-sm project-sort-dir-btn"
                       type="button"
@@ -4314,16 +4324,29 @@ function formatSizeGb(bytes) {
                 </div>
               </div>
               <div className="project-list-wrap">
-                {sortedProjects.map((project) => {
+                {sortedProjects.map((project, index) => {
                   const projectRootPath = getProjectRootPath(project);
+                  const domain = getProjectLinkDomain(project) || "unknown";
+                  const prevDomain =
+                    projectSortKey === "link_domain" && index > 0
+                      ? getProjectLinkDomain(sortedProjects[index - 1]) || "unknown"
+                      : null;
+                  const showGroupHeader = projectSortKey === "link_domain" && domain !== prevDomain;
                   return (
-                    <div key={project.id} className="project-list-cell">
-                      <div
-                        className="card project-item h-100"
-                        onContextMenu={(e) => {
-                          e.preventDefault();
-                        }}
-                      >
+                    <React.Fragment key={project.id}>
+                      {showGroupHeader && (
+                        <div className="project-group-header">
+                          <span className="project-group-label">Anbieter</span>
+                          <span className="source-domain-badge">{domain}</span>
+                        </div>
+                      )}
+                      <div className="project-list-cell">
+                        <div
+                          className="card project-item h-100"
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                          }}
+                        >
                         {editingProjectId === project.id ? (
                           <div className="card-body project-edit">
                             <label className="form-label">Name</label>
@@ -4445,6 +4468,11 @@ function formatSizeGb(bytes) {
                             <div className="card-body project-body">
                               <div className="project-title-row">
                                 <h3 className="project-title">#{project.id} {project.name || "-"}</h3>
+                                {getProjectLinkDomain(project) && (
+                                  <span className="source-domain-badge" title={project.link || getProjectLinkDomain(project)}>
+                                    {getProjectLinkDomain(project)}
+                                  </span>
+                                )}
                               </div>
                               <div className="project-meta">
                                 <span className="project-meta-label">Link</span>
@@ -4677,6 +4705,7 @@ function formatSizeGb(bytes) {
                         )}
                       </div>
                     </div>
+                    </React.Fragment>
                   );
                 })}
                 {filteredProjects.length === 0 && (
