@@ -1992,7 +1992,6 @@ class ProjectReimport(BaseModel):
 
 
 class ProjectExportCmd(BaseModel):
-    game_path: Optional[str] = None
     skip_preview_images: Optional[bool] = None
 
 
@@ -4845,17 +4844,7 @@ def _ensure_uproject_file(project_name: str, dest_root: Path, source_path: Optio
     target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def _resolve_export_game_path(project_row: Dict[str, Any], override: Optional[str]) -> str:
-    if override:
-        raw = override.strip()
-        if not raw.startswith("/"):
-            raw = f"/{raw}"
-        if not raw.lower().startswith("/game"):
-            raw = f"/Game{raw}"
-        return raw
-    source_folder = (project_row.get("source_folder") or "").strip().strip("/\\")
-    if source_folder:
-        return f"/Game/{source_folder}"
+def _resolve_export_game_path(_: Dict[str, Any], __: Optional[str] = None) -> str:
     return "/Game"
 
 
@@ -6805,7 +6794,7 @@ def run_project_export_cmd(project_id: int, payload: ProjectExportCmd) -> Dict[s
     uproject_path = _prefer_import_uproject(work_root)
     _ensure_project_render_defaults(Path(uproject_path).parent)
 
-    game_path = _resolve_export_game_path(project, payload.game_path if payload else None)
+    game_path = _resolve_export_game_path(project)
     b_skip_preview_images = bool(payload and payload.skip_preview_images)
     exec_cmd = f"aeb {game_path}"
     if b_skip_preview_images:
