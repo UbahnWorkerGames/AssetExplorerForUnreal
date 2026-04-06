@@ -6958,7 +6958,7 @@ def test_llm_tags(
             mime = file.content_type or "image/png"
             image_data_url = f"data:{mime};base64,{b64}"
         else:
-            sample_path = BASE_DIR.parent / "logo64.png"
+            sample_path = BASE_DIR / "frontend" / "src" / "assets" / "logo64.png"
             if sample_path.exists():
                 data = sample_path.read_bytes()
                 b64 = base64.b64encode(data).decode("utf-8")
