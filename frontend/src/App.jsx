@@ -740,9 +740,10 @@ export default function App() {
     return "LLM";
   }, [settings.provider]);
   const llmActionGroupLabel = useMemo(() => {
+    if (view !== "projects") return "LLM";
     if (activeProviderLabel === "OpenAI") return "OpenAI";
     return `AI (${activeProviderLabel})`;
-  }, [activeProviderLabel]);
+  }, [activeProviderLabel, view]);
   const tagLanguageLabel = useMemo(() => {
     const raw = String(settings.tag_language || "").trim();
     return raw || "english";
@@ -765,11 +766,23 @@ export default function App() {
   }
   function handleViewClick(nextView, preserveProjectSelection = false, hashParams = null) {
     if (typeof window !== "undefined") {
-      if (hashParams && typeof hashParams === "object") {
-        const qs = new URLSearchParams(hashParams).toString();
-        window.location.hash = qs ? `${nextView}?${qs}` : nextView;
+      if (nextView === "assets") {
+        const currentUrl = new URL(window.location.href);
+        if (hashParams && typeof hashParams === "object") {
+          const qs = new URLSearchParams(hashParams).toString();
+          if (qs) {
+            currentUrl.search = qs;
+          }
+        }
+        currentUrl.hash = "";
+        window.history.replaceState(null, "", `${currentUrl.pathname}${currentUrl.search}`);
       } else {
-        window.location.hash = nextView;
+        if (hashParams && typeof hashParams === "object") {
+          const qs = new URLSearchParams(hashParams).toString();
+          window.location.hash = qs ? `${nextView}?${qs}` : nextView;
+        } else {
+          window.location.hash = nextView;
+        }
       }
     }
     setAboutOpen(false);
@@ -813,6 +826,18 @@ export default function App() {
     if (typeof window === "undefined") return;
     const { view: hashView, params } = getHashViewAndParams();
     const qs = params.toString();
+    if (view === "assets") {
+      const currentUrl = new URL(window.location.href);
+      if (qs) {
+        currentUrl.search = qs;
+      }
+      currentUrl.hash = "";
+      const nextUrl = `${currentUrl.pathname}${currentUrl.search}`;
+      if (`${window.location.pathname}${window.location.search}` !== nextUrl || window.location.hash) {
+        window.history.replaceState(null, "", nextUrl);
+      }
+      return;
+    }
     const hash = `#${view}${hashView === view && qs ? `?${qs}` : ""}`;
     if (window.location.hash !== hash) {
       window.history.replaceState(null, "", hash);
@@ -3291,7 +3316,11 @@ function formatSizeGb(bytes) {
               <a
                 key={key}
                 className={`nav-link btn btn-link ${view === key ? "active" : ""}`}
-                href={`#${key}`}
+                href={
+                  key === "assets" && typeof window !== "undefined"
+                    ? `${window.location.pathname}${window.location.search}`
+                    : `#${key}`
+                }
                 onClick={(e) => {
                   e.preventDefault();
                   handleViewClick(key);
