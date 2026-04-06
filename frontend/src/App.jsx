@@ -4445,11 +4445,6 @@ function formatSizeGb(bytes) {
                             <div className="card-body project-body">
                               <div className="project-title-row">
                                 <h3 className="project-title">#{project.id} {project.name || "-"}</h3>
-                                {getProjectLinkDomain(project) && (
-                                  <span className="source-domain-badge" title={project.link || getProjectLinkDomain(project)}>
-                                    {getProjectLinkDomain(project)}
-                                  </span>
-                                )}
                               </div>
                               <div className="project-meta">
                                 <span className="project-meta-label">Link</span>
