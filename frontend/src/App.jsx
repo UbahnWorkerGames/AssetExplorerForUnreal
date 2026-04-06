@@ -287,11 +287,6 @@ function AssetCard({ asset, project, onSelect, onContextMenu, tileSize, isSelect
         <div className="asset-title">{displayName}</div>
         <div className="asset-meta asset-meta-source">
           <span>{project?.name || "Unassigned"}</span>
-          {sourceDomain && sourceDomain !== "unknown" && (
-            <span className="asset-source-domain" title={project?.link || sourceDomain}>
-              {sourceDomain}
-            </span>
-          )}
         </div>
         {project?.art_style && <div className="asset-style">{project.art_style}</div>}
         {project?.project_era && <div className="asset-era">{project.project_era}</div>}
