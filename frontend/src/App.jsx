@@ -3646,13 +3646,8 @@ function formatSizeGb(bytes) {
                                   onChange={() => toggleProject(project.id)}
                                 />
                                 <span className="project-filter-name" style={{ maxWidth: `${projectNameWrap}ch` }}>
-                                  #{project.id} {project.name}
+                                  {project.name}
                                 </span>
-                                {getProjectLinkDomain(project) && (
-                                  <span className="source-domain-badge source-domain-badge-inline">
-                                    {getProjectLinkDomain(project)}
-                                  </span>
-                                )}
                                 <span className="filter-meta">
                                   {projectStats[project.id]?.matched ?? 0}/{projectStats[project.id]?.total ?? 0}
                                 </span>
