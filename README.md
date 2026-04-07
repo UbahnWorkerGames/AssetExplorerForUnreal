@@ -26,13 +26,17 @@ Important:
   - UnrealAssetExplorer settings
 - the frontend dev server proxies API and SSE routes to the backend, so `http://127.0.0.1:5173/events` works in dev
 
-Project creation recommendation:
+Project model:
 
-- Prefer creating/syncing projects via Unreal export/import flow (AEB bridge or Epic/Fab import script), not by manual project creation in the UI.
+- Projects now have an explicit source mode in the UI:
+  - `External` keeps the source tied to the original pack path.
+  - `Internal` prefers the local project folder for open/export decisions.
+- `full_project_copy` controls whether the whole project is copied or only the selected source folder.
+- Prefer creating/syncing projects via Unreal export/import flow (AEB bridge or Epic/Fab import script), not by manual database edits.
 - Typical export calls are:
   - `aeb /Game/`
   - `aeb /Game/byHans1/MyPack/SM_Crate.SM_Crate`
-- This keeps `project_root` / `source_folder` mapping consistent and avoids duplicate/wrong project roots.
+- This keeps `project_root` / `source_folder` mapping consistent and avoids duplicate or wrong project roots.
 
 Delivery standard:
 
