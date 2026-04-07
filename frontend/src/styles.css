@@ -1186,6 +1186,7 @@ body {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
+  max-width: 920px;
 }
 
 .humble-summary-item {
@@ -1214,12 +1215,14 @@ body {
   margin-top: 14px;
   display: grid;
   gap: 10px;
+  width: 100%;
+  max-width: 920px;
 }
 
 .humble-check-row {
   display: grid;
   gap: 8px;
-  padding: 12px;
+  padding: 10px 12px;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(15, 28, 31, 0.35);
@@ -1286,8 +1289,9 @@ body {
 
 .humble-check-project-name {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
   word-break: break-word;
+  line-height: 1.35;
 }
 
 .humble-check-empty {

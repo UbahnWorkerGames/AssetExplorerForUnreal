@@ -5221,34 +5221,10 @@ function formatSizeGb(bytes) {
                         </a>
                         <div className="humble-check-projects">
                           {entry.owned ? (
-                            <>
-                              <div className="humble-check-project-name">
-                                Project: {project?.name || "linked project"}
-                                {entry.projectMatches.length > 1 ? ` (+${entry.projectMatches.length - 1} more)` : ""}
-                              </div>
-                              <div className="project-actions humble-check-actions">
-                                <button
-                                  className="btn btn-outline-dark btn-sm"
-                                  type="button"
-                                  onClick={() => project && handleOpenProject(project)}
-                                  title="Open the linked project folder."
-                                  disabled={!project || !showProjectFilesystemActions}
-                                >
-                                  Open project
-                                </button>
-                                {project?.link && (
-                                  <a
-                                    className="btn btn-outline-dark btn-sm humble-check-project-link"
-                                    href={project.link}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    title="Open the project link stored in the database."
-                                  >
-                                    Project link
-                                  </a>
-                                )}
-                              </div>
-                            </>
+                            <div className="humble-check-project-name">
+                              Linked project: {project?.name || "matched in database"}
+                              {entry.projectMatches.length > 1 ? ` (+${entry.projectMatches.length - 1} more)` : ""}
+                            </div>
                           ) : (
                             <div className="humble-check-project-name">Not linked to any project yet.</div>
                           )}
