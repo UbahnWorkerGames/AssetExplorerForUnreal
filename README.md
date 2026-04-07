@@ -34,8 +34,9 @@ Project creation recommendation:
 
 Delivery standard:
 
-- If Python is available, keep the repo in a fully runnable state and include the rebuilt runtime artifacts needed for direct execution.
-- Avoid shipping source changes without the matching runnable package when a rebuild is part of the change.
+- Python is the only runtime prerequisite for users who clone the repo.
+- Do not require npm for cloned users; only use it when rebuilding frontend source changes.
+- When frontend changes require a rebuild, include the regenerated `frontend/dist` files in git so the repo stays directly runnable.
 
 Project path blacklist:
 
@@ -66,15 +67,15 @@ Project path blacklist:
 ### Development
 
 - Python 3.10+
-- Node.js + npm
+- Node.js + npm only if you change frontend source and rebuild `frontend/dist`
 
 ### Production Runtime
 
 - Python 3.10+
 - Prebuilt frontend `frontend/dist`
 
-Node is only required to build the frontend once.
-The frontend is pre-generated in this repo, so you can start directly with the Python runtime scripts.
+Node.js/npm are not required for normal use after cloning this repo.
+The frontend is pre-generated in this repo, and when frontend code changes we rebuild `frontend/dist` and commit the generated files.
 
 ## Quick Start
 
