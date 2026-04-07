@@ -1702,11 +1702,12 @@ def _run_startup_import_worker(settings: Dict[str, str]) -> None:
                 import_stats.get("errors", 0),
             )
     except Exception as exc:
-        _startup_import_set(running=False, finished_at=now_iso())
         logger.warning("Startup batch import worker failed: %s", exc)
     finally:
+        _startup_import_set(running=False, finished_at=now_iso(), current_flow="")
         _ensure_task_worker()
         _ensure_openai_recovery_worker()
+        _configure_frontend(settings)
 
 
 def _task_progress(

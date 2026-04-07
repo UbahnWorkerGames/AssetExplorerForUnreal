@@ -154,6 +154,16 @@ UI Extras:
 - Owned items are shown with matching projects; missing items stay visible for manual follow-up.
 - The Fab listing is opened from a compact button instead of a long URL.
 
+![HumbleBundle Check](Images/s6.png)
+
+Short guide:
+
+1. Paste the raw Fab page HTML or the JSON object into `HumbleBundle Check`.
+2. Click `Analyze`.
+3. Read the summary counts for `Found`, `Owned`, `Missing`, and `Linked projects`.
+4. Use the `Fab` button on each card to open the listing.
+5. Green cards are already linked to a project, red cards are not.
+
 ## Project Actions (What Each Button Does)
 
 Global row:
