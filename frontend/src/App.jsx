@@ -66,7 +66,10 @@ import {
   faImages,
   faLightbulb,
 } from "@fortawesome/free-regular-svg-icons";
-const views = ["assets", "projects", "upload", "tasks", "settings"];
+const views = ["assets", "projects", "upload", "tasks", "settings", "humblebundle"];
+const viewLabels = {
+  humblebundle: "HumbleBundle Check",
+};
 const DEFAULT_TAG_PROMPT = `Generate as many relevant asset tags as make sense (single words, lowercase, no duplicates) in {language}.
 Return ONLY a JSON object with a 'tags' array of strings, ordered by relevance (best match first).
 Name: {name}
@@ -181,6 +184,153 @@ function normalizeLinkDomain(link) {
   } catch {
     return raw.replace(/^www\./i, "").toLowerCase();
   }
+}
+
+const FAB_LISTING_URL_RE = /(?:https?:\/\/)?(?:www\.)?fab\.com\/listings\/([0-9a-f-]{36})/i;
+const FAB_LISTING_ID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})/i;
+const FAB_WEBPACK_SCRIPT_RE = /<script\b[^>]*id=["']webpack-bundle-page-data["'][^>]*>([\s\S]*?)<\/script>/i;
+const FAB_HUMAN_NAME_KEYS = ["human_name", "humanName"];
+const FAB_LINK_KEYS = ["link", "url", "href", "canonicalUrl", "permalink", "listingUrl"];
+const FAB_ID_KEYS = ["id", "listingId", "listing_id", "productId", "product_id"];
+
+function extractFabListingId(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const urlMatch = raw.match(FAB_LISTING_URL_RE);
+  if (urlMatch) return String(urlMatch[1] || "").toLowerCase();
+  const idMatch = raw.match(FAB_LISTING_ID_RE);
+  if (idMatch) return String(idMatch[1] || "").toLowerCase();
+  return "";
+}
+
+function normalizeFabListingLink(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const id = extractFabListingId(raw);
+  return id ? `https://www.fab.com/listings/${id}` : raw;
+}
+
+function pickFirstString(node, keys) {
+  for (const key of keys) {
+    const value = node?.[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+function findDeepString(node, predicate, seen = new WeakSet()) {
+  if (!node || typeof node !== "object") return "";
+  if (seen.has(node)) return "";
+  seen.add(node);
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const found = findDeepString(item, predicate, seen);
+      if (found) return found;
+    }
+    return "";
+  }
+  for (const value of Object.values(node)) {
+    if (typeof value === "string") {
+      const found = predicate(value);
+      if (found) return found;
+      continue;
+    }
+    if (value && typeof value === "object") {
+      const found = findDeepString(value, predicate, seen);
+      if (found) return found;
+    }
+  }
+  return "";
+}
+
+function findFabListingLink(node) {
+  const direct = pickFirstString(node, FAB_LINK_KEYS);
+  if (direct) {
+    const normalized = normalizeFabListingLink(direct);
+    if (extractFabListingId(normalized)) return normalized;
+  }
+  return findDeepString(node, (value) => {
+    if (/fab\.com\/listings\//i.test(value)) {
+      return normalizeFabListingLink(value);
+    }
+    return "";
+  });
+}
+
+function findFabListingIdInNode(node) {
+  const direct = pickFirstString(node, FAB_ID_KEYS);
+  if (direct) {
+    const id = extractFabListingId(direct);
+    if (id) return id;
+  }
+  return findDeepString(node, (value) => extractFabListingId(value));
+}
+
+function collectFabListings(node, entries, path = [], seenNodes = new WeakSet(), seenKeys = new Set()) {
+  if (!node || typeof node !== "object") return;
+  if (seenNodes.has(node)) return;
+  seenNodes.add(node);
+
+  if (Array.isArray(node)) {
+    node.forEach((item, index) => collectFabListings(item, entries, path.concat(index), seenNodes, seenKeys));
+    return;
+  }
+
+  const humanName = pickFirstString(node, FAB_HUMAN_NAME_KEYS);
+  if (humanName) {
+    const id = findFabListingIdInNode(node);
+    const link = normalizeFabListingLink(findFabListingLink(node) || (id ? `https://www.fab.com/listings/${id}` : ""));
+    const key = extractFabListingId(link) || link.toLowerCase();
+    if (link && !seenKeys.has(key)) {
+      seenKeys.add(key);
+      entries.push({
+        human_name: humanName,
+        link,
+        id: extractFabListingId(link) || id || "",
+        path: path.join("."),
+      });
+    }
+  }
+
+  for (const [key, value] of Object.entries(node)) {
+    if (value && typeof value === "object") {
+      collectFabListings(value, entries, path.concat(key), seenNodes, seenKeys);
+    }
+  }
+}
+
+function parseFabBundleInput(input) {
+  const raw = String(input || "").trim();
+  if (!raw) {
+    return {
+      error: "",
+      entries: [],
+      sourceType: "empty",
+    };
+  }
+
+  const scriptMatch = raw.match(FAB_WEBPACK_SCRIPT_RE);
+  const jsonText = String(scriptMatch ? scriptMatch[1] : raw).trim();
+  let parsed;
+
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch (error) {
+    return {
+      error: `JSON parse failed: ${error?.message || "unknown error"}`,
+      entries: [],
+      sourceType: scriptMatch ? "webpack-bundle-page-data" : "json",
+    };
+  }
+
+  const entries = [];
+  collectFabListings(parsed, entries);
+
+  return {
+    error: "",
+    entries,
+    sourceType: scriptMatch ? "webpack-bundle-page-data" : "json",
+  };
 }
 
 function getProjectLinkDomain(project) {
@@ -377,6 +527,8 @@ export default function App() {
   const [settingsSetcardExcludeTypes, setSettingsSetcardExcludeTypes] = useState([]);
   const [settingsExportIncludeTypes, setSettingsExportIncludeTypes] = useState([]);
   const [settingsExportExcludeTypes, setSettingsExportExcludeTypes] = useState([]);
+  const [humbleBundleDraft, setHumbleBundleDraft] = useState("");
+  const [humbleBundleInput, setHumbleBundleInput] = useState("");
   const [assetTypeCatalog, setAssetTypeCatalog] = useState([]);
   const [assetTypeCatalogInput, setAssetTypeCatalogInput] = useState("");
   const [projectPreview, setProjectPreview] = useState(null);
@@ -1071,6 +1223,53 @@ export default function App() {
     projects.forEach((project) => map.set(project.id, project));
     return map;
   }, [projects]);
+  const projectFabIndex = useMemo(() => {
+    const map = new Map();
+    projects.forEach((project) => {
+      const fabId = extractFabListingId(project?.link || "");
+      if (!fabId) return;
+      const current = map.get(fabId) || [];
+      current.push(project);
+      map.set(fabId, current);
+    });
+    return map;
+  }, [projects]);
+  const humbleBundleAnalysis = useMemo(() => {
+    const parsed = parseFabBundleInput(humbleBundleInput);
+    if (parsed.error) {
+      return {
+        ...parsed,
+        ownedCount: 0,
+        missingCount: 0,
+        linkedProjectCount: 0,
+        rows: [],
+      };
+    }
+
+    const rows = parsed.entries.map((entry) => {
+      const projectMatches = entry.id ? projectFabIndex.get(entry.id) || [] : [];
+      return {
+        ...entry,
+        projectMatches,
+        owned: projectMatches.length > 0,
+      };
+    });
+    rows.sort((a, b) => {
+      const ownedDelta = Number(Boolean(b.owned)) - Number(Boolean(a.owned));
+      if (ownedDelta !== 0) return ownedDelta;
+      return String(a.human_name || "").localeCompare(String(b.human_name || ""), undefined, {
+        sensitivity: "base",
+      });
+    });
+
+    return {
+      ...parsed,
+      ownedCount: rows.filter((row) => row.owned).length,
+      missingCount: rows.filter((row) => !row.owned).length,
+      linkedProjectCount: rows.reduce((count, row) => count + row.projectMatches.length, 0),
+      rows,
+    };
+  }, [humbleBundleInput, projectFabIndex]);
   const projectSourceDomains = useMemo(() => {
     const set = new Set();
     projects.forEach((project) => {
@@ -3330,7 +3529,7 @@ function formatSizeGb(bytes) {
                   handleViewClick(key);
                 }}
               >
-                {key}
+                {viewLabels[key] || key}
               </a>
             ))}
             <div className={`nav-item nav-dropdown ${aboutOpen ? "open" : ""}`} ref={aboutRef}>
@@ -4921,6 +5120,133 @@ function formatSizeGb(bytes) {
                 </div>
               );
             })}
+          </div>
+        </section>
+      )}
+      {view === "humblebundle" && (
+        <section className="panel">
+          <div className="section-title">HumbleBundle Check</div>
+          <div className="settings-note">
+            Paste the raw JSON object or the HTML snippet with <code>#webpack-bundle-page-data</code>. The checker extracts
+            each entry&apos;s <code>human_name</code>, resolves the Fab listing link, and compares it with your project links.
+          </div>
+          <div className="tag-io-grid humble-check-grid">
+            <div className="tag-io-card humble-check-input">
+              <h4>Input</h4>
+              <textarea
+                className="form-control humble-check-textarea"
+                placeholder={'Paste JSON or HTML here. Example: {"human_name":"Circus - Theme Park Attraction"}'}
+                value={humbleBundleDraft}
+                onChange={(e) => setHumbleBundleDraft(e.target.value)}
+              />
+              <div className="project-actions humble-check-actions">
+                <button
+                  className="btn btn-outline-dark btn-sm"
+                  type="button"
+                  onClick={() => setHumbleBundleInput(humbleBundleDraft)}
+                  title="Parse the current input and rebuild the comparison list."
+                >
+                  Analyze
+                </button>
+                <button
+                  className="btn btn-outline-dark btn-sm"
+                  type="button"
+                  onClick={() => {
+                    setHumbleBundleDraft("");
+                    setHumbleBundleInput("");
+                  }}
+                  title="Clear the input and results."
+                >
+                  Clear
+                </button>
+              </div>
+              {humbleBundleAnalysis.error ? (
+                <div className="settings-note text-warning">{humbleBundleAnalysis.error}</div>
+              ) : (
+                <div className="settings-note">
+                  {humbleBundleInput
+                    ? `Parsed ${humbleBundleAnalysis.rows.length} listing(s) from ${humbleBundleAnalysis.sourceType}.`
+                    : "No input analyzed yet."}
+                </div>
+              )}
+            </div>
+            <div className="tag-io-card humble-check-summary">
+              <h4>Result</h4>
+              <div className="humble-summary-grid">
+                <div className="humble-summary-item">
+                  <span className="humble-summary-label">Found</span>
+                  <span className="humble-summary-value">{humbleBundleAnalysis.rows.length}</span>
+                </div>
+                <div className="humble-summary-item">
+                  <span className="humble-summary-label">Owned</span>
+                  <span className="humble-summary-value">{humbleBundleAnalysis.ownedCount}</span>
+                </div>
+                <div className="humble-summary-item">
+                  <span className="humble-summary-label">Missing</span>
+                  <span className="humble-summary-value">{humbleBundleAnalysis.missingCount}</span>
+                </div>
+                <div className="humble-summary-item">
+                  <span className="humble-summary-label">Linked projects</span>
+                  <span className="humble-summary-value">{humbleBundleAnalysis.linkedProjectCount}</span>
+                </div>
+              </div>
+              <div className="humble-check-list">
+                {humbleBundleAnalysis.rows.length === 0 ? (
+                  <div className="humble-check-empty">Nothing to show yet.</div>
+                ) : (
+                  humbleBundleAnalysis.rows.map((entry) => {
+                    const project = entry.projectMatches?.[0] || null;
+                    return (
+                      <div key={`${entry.id || entry.link || entry.human_name}`} className={`humble-check-row ${entry.owned ? "owned" : "missing"}`}>
+                        <div className="humble-check-row-top">
+                          <span className={`humble-check-badge ${entry.owned ? "owned" : "missing"}`}>
+                            {entry.owned ? "Owned" : "Missing"}
+                          </span>
+                          <span className="humble-check-row-name">{entry.human_name}</span>
+                        </div>
+                        <a className="project-link humble-check-link" href={entry.link} target="_blank" rel="noreferrer">
+                          {entry.link}
+                        </a>
+                        <div className="humble-check-projects">
+                          {entry.owned ? (
+                            <>
+                              <div className="humble-check-project-name">
+                                Project: {project?.name || "linked project"}
+                                {entry.projectMatches.length > 1 ? ` (+${entry.projectMatches.length - 1} more)` : ""}
+                              </div>
+                              <div className="project-actions humble-check-actions">
+                                <button
+                                  className="btn btn-outline-dark btn-sm"
+                                  type="button"
+                                  onClick={() => project && handleOpenProject(project)}
+                                  title="Open the linked project folder."
+                                  disabled={!project || !showProjectFilesystemActions}
+                                >
+                                  Open project
+                                </button>
+                                {project?.link && (
+                                  <a
+                                    className="btn btn-outline-dark btn-sm humble-check-project-link"
+                                    href={project.link}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    title="Open the project link stored in the database."
+                                  >
+                                    Project link
+                                  </a>
+                                )}
+                              </div>
+                            </>
+                          ) : (
+                            <div className="humble-check-project-name">Not linked to any project yet.</div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
           </div>
         </section>
       )}
