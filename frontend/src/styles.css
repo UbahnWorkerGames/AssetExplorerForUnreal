@@ -1216,7 +1216,8 @@ body {
   display: grid;
   gap: 10px;
   width: 100%;
-  max-width: 920px;
+  max-width: 100%;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .humble-check-row {
@@ -1226,6 +1227,7 @@ body {
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(15, 28, 31, 0.35);
+  align-content: start;
 }
 
 .humble-check-row.owned {
@@ -1285,6 +1287,7 @@ body {
 .humble-check-projects {
   display: grid;
   gap: 8px;
+  align-items: start;
 }
 
 .humble-check-project-name {
@@ -1303,6 +1306,11 @@ body {
 .humble-check-project-link {
   display: inline-flex;
   align-items: center;
+}
+
+.humble-check-fab-link {
+  width: fit-content;
+  justify-self: start;
 }
 
 .tag-io-card {

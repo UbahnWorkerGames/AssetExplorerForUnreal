@@ -5216,9 +5216,6 @@ function formatSizeGb(bytes) {
                           </span>
                           <span className="humble-check-row-name">{entry.human_name}</span>
                         </div>
-                        <a className="project-link humble-check-link" href={entry.link} target="_blank" rel="noreferrer">
-                          {entry.link}
-                        </a>
                         <div className="humble-check-projects">
                           {entry.owned ? (
                             <div className="humble-check-project-name">
@@ -5228,6 +5225,9 @@ function formatSizeGb(bytes) {
                           ) : (
                             <div className="humble-check-project-name">Not linked to any project yet.</div>
                           )}
+                          <a className="btn btn-outline-dark btn-sm humble-check-fab-link" href={entry.link} target="_blank" rel="noreferrer">
+                            Fab
+                          </a>
                         </div>
                       </div>
                     );
