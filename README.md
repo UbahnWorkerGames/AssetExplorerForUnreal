@@ -8,6 +8,7 @@ It combines a FastAPI backend with a React frontend and adds workflows for:
 - metadata and tag management
 - LLM/OpenAI-assisted tag generation and translation
 - import/export/sync flows for UE asset packs
+- HumbleBundle/Fab listing checks against projects already in the database
 
 ## Unreal Integration
 
@@ -23,6 +24,7 @@ Important:
 - ports are configurable in both places:
   - Unreal plugin settings
   - UnrealAssetExplorer settings
+- the frontend dev server proxies API and SSE routes to the backend, so `http://127.0.0.1:5173/events` works in dev
 
 Project creation recommendation:
 
@@ -44,6 +46,13 @@ Project path blacklist:
 - Use it for source roots you manually confirmed as duplicates and want to skip on later imports.
 - One path per line or CSV entry is fine.
 - The importer skips matching project roots before creating a new project entry.
+
+Tag import startup deferral:
+
+- Large tag CSV imports can be deferred to startup instead of running immediately.
+- The toggle lives in Settings as `Defer large tag imports to startup`.
+- Imports over 1000 data rows are queued into `startup_jobs` and processed on the next backend restart.
+- The UI shows a clear deferred-state message instead of a generic task toast.
 
 ## Tech Stack
 
@@ -138,6 +147,12 @@ Screenshots (from `Images/`):
 ![Overview 4](Images/4.jpg)
 ![Overview 5](Images/5.jpg)
 ![Setcard Example](Images/setcard.png)
+
+UI Extras:
+
+- `HumbleBundle Check`: paste a Fab JSON object or raw page HTML and compare the listings against your existing projects.
+- Owned items are shown with matching projects; missing items stay visible for manual follow-up.
+- The Fab listing is opened from a compact button instead of a long URL.
 
 ## Project Actions (What Each Button Does)
 
