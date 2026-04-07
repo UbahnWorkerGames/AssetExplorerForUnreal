@@ -292,7 +292,13 @@ def _queue_large_tag_import_for_startup(
         row_count,
         Path(job_path).name,
     )
-    return {"status": "deferred", "job_path": job_path, "rows": int(row_count)}
+    return {
+        "status": "deferred",
+        "message": f"Tags import deferred to startup ({int(row_count)} rows). It will run on next restart.",
+        "job_path": job_path,
+        "rows": int(row_count),
+        "startup_import": True,
+    }
 
 
 def _run_startup_jobs(settings: Dict[str, str]) -> Dict[str, int]:

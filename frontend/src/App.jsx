@@ -3108,13 +3108,21 @@ export default function App() {
         projectId: tagImportProjectId || undefined,
         mode: tagImportMode,
       });
-      if (result?.task_id) {
+      if (result?.status === "deferred") {
+        const rowCount = Number(result.rows || 0);
+        toast.info(
+          result.message ||
+            `Tags import deferred to startup${rowCount ? ` (${rowCount} rows)` : ""}. It will run on next restart.`
+        );
+      } else if (result?.task_id) {
         toast.info(`Tags import queued (task ${result.task_id})`);
       } else {
-        toast.info(`Imported tags: ${result.updated}, missing: ${result.missing}`);
+        const updated = Number(result?.updated ?? 0);
+        const missing = Number(result?.missing ?? 0);
+        toast.info(`Imported tags: ${updated}, missing: ${missing}`);
       }
       setTagImportFile(null);
-      if (!result?.task_id) {
+      if (!result?.task_id && result?.status !== "deferred") {
         resetPaging();
       }
     } catch (err) {
