@@ -18,7 +18,7 @@ import time
 import webbrowser
 import uuid
 import zipfile
-from collections import deque
+from collections import defaultdict, deque
 from datetime import datetime
 from pathlib import Path
 import re
@@ -2120,16 +2120,167 @@ def _find_project_by_root(
     rows = fetch_all(conn, "SELECT * FROM projects")
     if not rows:
         return None
+    counts = _project_asset_count_map(conn)
+    folder_key = _normalize_source_folder_value(source_folder)
+    matches: List[tuple[int, int, str, int, Dict[str, Any]]] = []
     for row in rows:
-        row_values = {
-            _normalize_path_value(row.get("source_path")),
-            _normalize_source_root_value(row.get("source_path")),
-            _normalize_path_value(row.get("folder_path")),
-            _normalize_source_root_value(row.get("folder_path")),
-        }
-        if root_key in row_values:
-            return row
-    return None
+        row_values = _project_identity_values(row)
+        if root_key not in row_values:
+            continue
+        row_folder_key = _normalize_source_folder_value(row.get("source_folder"))
+        exact_folder_match = 0 if not folder_key or row_folder_key == folder_key else 1
+        asset_count = int(counts.get(int(row.get("id") or 0), 0))
+        created_at = str(row.get("created_at") or "")
+        matches.append((exact_folder_match, -asset_count, created_at, int(row.get("id") or 0), row))
+    if not matches:
+        return None
+    matches.sort(key=lambda item: (item[0], item[1], item[2], item[3]))
+    return matches[0][4]
+
+
+def _normalize_source_folder_value(value: Optional[Any]) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip().replace("\\", "/").strip("/")
+    if not text:
+        return ""
+    try:
+        return Path(text).name.lower()
+    except Exception:
+        return text.split("/")[-1].lower()
+
+
+def _project_identity_values(row: Dict[str, Any]) -> set[str]:
+    values: set[str] = set()
+    for key in ("source_path", "folder_path"):
+        raw_value = row.get(key)
+        normalized_value = _normalize_path_value(raw_value)
+        if normalized_value:
+            values.add(normalized_value)
+        root_value = _normalize_source_root_value(raw_value)
+        if root_value:
+            values.add(root_value)
+
+    source_folder_value = _normalize_source_folder_value(row.get("source_folder"))
+    if source_folder_value:
+        values.add(source_folder_value)
+
+    resolved = _resolve_source_paths(row.get("source_path"), row.get("source_folder"))
+    project_root = resolved.get("project_root")
+    if project_root:
+        values.add(_normalize_path_value(str(project_root)))
+    source_folder = resolved.get("source_folder")
+    if source_folder:
+        values.add(_normalize_path_value(str(source_folder)))
+        values.add(_normalize_source_folder_value(str(source_folder)))
+
+    return values
+
+
+def _project_asset_count_map(conn: sqlite3.Connection) -> Dict[int, int]:
+    rows = fetch_all(
+        conn,
+        "SELECT project_id, COUNT(*) AS total FROM assets WHERE project_id IS NOT NULL GROUP BY project_id",
+    )
+    counts: Dict[int, int] = {}
+    for row in rows:
+        try:
+            project_id = int(row.get("project_id") or 0)
+            if project_id > 0:
+                counts[project_id] = int(row.get("total") or 0)
+        except Exception:
+            continue
+    return counts
+
+
+def _dedupe_projects_by_source_identity(conn: sqlite3.Connection) -> int:
+    rows = fetch_all(conn, "SELECT * FROM projects")
+    if not rows:
+        return 0
+
+    counts = _project_asset_count_map(conn)
+    groups: Dict[tuple[str, str], List[Dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        source_path = _normalize_path_value(row.get("source_path"))
+        source_folder = _normalize_source_folder_value(row.get("source_folder"))
+        if not source_path:
+            continue
+        groups[(source_path, source_folder)].append(row)
+
+    merged = 0
+    for (source_path, source_folder), group in groups.items():
+        if len(group) < 2:
+            continue
+        group.sort(
+            key=lambda row: (
+                -int(counts.get(int(row.get("id") or 0), 0)),
+                str(row.get("created_at") or ""),
+                int(row.get("id") or 0),
+            )
+        )
+        canonical = group[0]
+        canonical_id = int(canonical.get("id") or 0)
+        if canonical_id <= 0:
+            continue
+        canonical_folder = Path(canonical.get("folder_path") or "")
+        canonical_content = canonical_folder / "Content" if str(canonical_folder).strip() else None
+
+        for duplicate in group[1:]:
+            duplicate_id = int(duplicate.get("id") or 0)
+            if duplicate_id <= 0:
+                continue
+
+            duplicate_folder = Path(duplicate.get("folder_path") or "")
+            duplicate_content = duplicate_folder / "Content" if str(duplicate_folder).strip() else None
+            if canonical_content and duplicate_content and duplicate_content.exists() and duplicate_content.is_dir():
+                try:
+                    _sync_tree(duplicate_id, duplicate_content, canonical_content)
+                except Exception as exc:
+                    logger.warning(
+                        "Duplicate project content merge failed source_path=%s source_folder=%s duplicate_id=%s canonical_id=%s err=%s",
+                        source_path,
+                        source_folder,
+                        duplicate_id,
+                        canonical_id,
+                        exc,
+                    )
+
+            asset_rows = fetch_all(
+                conn,
+                "SELECT id, hash_full_blake3 FROM assets WHERE project_id = ? ORDER BY id",
+                (duplicate_id,),
+            )
+            for asset_row in asset_rows:
+                asset_id = int(asset_row.get("id") or 0)
+                if asset_id <= 0:
+                    continue
+                hash_full = str(asset_row.get("hash_full_blake3") or "").strip()
+                if hash_full:
+                    canonical_asset = fetch_one(
+                        conn,
+                        "SELECT id FROM assets WHERE project_id = ? AND hash_full_blake3 = ? LIMIT 1",
+                        (canonical_id, hash_full),
+                    )
+                    if canonical_asset:
+                        conn.execute(
+                            "UPDATE asset_tags SET asset_id = ? WHERE hash_full_blake3 = ?",
+                            (int(canonical_asset["id"]), hash_full),
+                        )
+                        conn.execute(
+                            "DELETE FROM asset_tags WHERE asset_id = ? AND (hash_full_blake3 IS NULL OR TRIM(hash_full_blake3) = '')",
+                            (asset_id,),
+                        )
+                        conn.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
+                        continue
+                conn.execute("UPDATE assets SET project_id = ? WHERE id = ?", (canonical_id, asset_id))
+
+            conn.execute("UPDATE openai_batches SET project_id = ? WHERE project_id = ?", (canonical_id, duplicate_id))
+            conn.execute("DELETE FROM projects WHERE id = ?", (duplicate_id,))
+            merged += 1
+
+    if merged:
+        _db_retry(lambda: conn.commit())
+    return merged
 
 
 def _build_image_data_url(image_path: Path, size: int, quality: int) -> str:
@@ -5758,6 +5909,9 @@ def startup() -> None:
     init_db()
     conn = get_db()
     _migrate_internal_source_paths_to_relative(conn)
+    merged_projects = _dedupe_projects_by_source_identity(conn)
+    if merged_projects:
+        logger.info("Startup duplicate project merge completed: merged=%s", merged_projects)
     settings = get_settings(conn)
     # Clear any queued/running tasks from previous session.
     try:
