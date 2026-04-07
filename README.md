@@ -16,7 +16,7 @@ For Unreal-side interaction you need:
 
 - https://github.com/UbahnWorkerGames/UnrealAssetExplorerBridge
 
-The bridge is currently shipped for UE 5.7.
+Use the bridge release that matches your Unreal version.
 
 Important:
 
