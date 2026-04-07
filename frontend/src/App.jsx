@@ -872,6 +872,7 @@ export default function App() {
     tag_display_limit: 0,
     sidebar_width: 280,
     purge_assets_on_startup: false,
+    defer_large_tag_imports_on_startup: true,
     use_temperature: false,
     temperature: 1,
     llm_min_interval_seconds: 0,
@@ -1515,6 +1516,10 @@ export default function App() {
         const raw = String(clean.default_full_project_copy).toLowerCase();
         clean.default_full_project_copy = raw === "true" || raw === "1" || raw === "yes" || raw === "on";
       }
+      if (clean.defer_large_tag_imports_on_startup !== undefined) {
+        const raw = String(clean.defer_large_tag_imports_on_startup).toLowerCase();
+        clean.defer_large_tag_imports_on_startup = raw === "true" || raw === "1" || raw === "yes" || raw === "on";
+      }
       if (clean.tag_use_batch_mode !== undefined) {
         const raw = String(clean.tag_use_batch_mode).toLowerCase();
         clean.tag_use_batch_mode = raw === "true" || raw === "1" || raw === "yes" || raw === "on";
@@ -1591,6 +1596,10 @@ export default function App() {
       }
       if (clean.purge_assets_on_startup !== undefined) {
         clean.purge_assets_on_startup = String(clean.purge_assets_on_startup).toLowerCase() === "true";
+      }
+      if (clean.defer_large_tag_imports_on_startup !== undefined) {
+        clean.defer_large_tag_imports_on_startup =
+          String(clean.defer_large_tag_imports_on_startup).toLowerCase() === "true";
       }
       const includeTypes = String(data.tag_include_types || "")
         .split(",")
@@ -2673,6 +2682,9 @@ export default function App() {
       }
       if (payload.default_full_project_copy !== undefined) {
         payload.default_full_project_copy = payload.default_full_project_copy ? "true" : "false";
+      }
+      if (payload.defer_large_tag_imports_on_startup !== undefined) {
+        payload.defer_large_tag_imports_on_startup = payload.defer_large_tag_imports_on_startup ? "true" : "false";
       }
       if (payload.tag_use_batch_mode !== undefined) {
         payload.tag_use_batch_mode = payload.tag_use_batch_mode ? "true" : "false";
@@ -5362,6 +5374,23 @@ function formatSizeGb(bytes) {
                       />
                       <label className="form-check-label" htmlFor="defaultFullProjectCopy">
                         Default new projects to full project copy
+                      </label>
+                    </div>
+                  </div>
+                  <div className="settings-compact-item">
+                    <div className="form-check">
+                      <input
+                        className="form-check-input"
+                        type="checkbox"
+                        checked={Boolean(settings.defer_large_tag_imports_on_startup)}
+                        onChange={(e) =>
+                          setSettings((prev) => ({ ...prev, defer_large_tag_imports_on_startup: e.target.checked }))
+                        }
+                        title="If a tag import CSV is larger than 1000 data rows, defer it to startup and process it from startup_jobs."
+                        id="deferLargeTagImportsOnStartup"
+                      />
+                      <label className="form-check-label" htmlFor="deferLargeTagImportsOnStartup">
+                        Defer large tag imports to startup
                       </label>
                     </div>
                   </div>

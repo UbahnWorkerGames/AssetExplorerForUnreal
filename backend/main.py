@@ -250,6 +250,51 @@ def _write_startup_job(kind: str, payload: Optional[Dict[str, Any]] = None) -> s
     return str(path)
 
 
+def _count_csv_data_rows(path: Path) -> int:
+    with path.open("r", encoding="utf-8", errors="ignore") as fh:
+        reader = csv.reader(fh)
+        try:
+            next(reader)
+        except StopIteration:
+            return 0
+        return sum(1 for _ in reader)
+
+
+def _defer_large_tag_imports_on_startup_enabled(settings: Optional[Dict[str, str]] = None) -> bool:
+    if settings is not None:
+        raw_setting = str(settings.get("defer_large_tag_imports_on_startup") or "").strip()
+        if raw_setting:
+            return _bool_from_setting(raw_setting)
+    raw_env = str(os.getenv("ASSET_DEFER_LARGE_TAG_IMPORTS_ON_STARTUP") or "").strip()
+    if raw_env:
+        return _bool_from_setting(raw_env)
+    return True
+
+
+def _queue_large_tag_import_for_startup(
+    path: Path,
+    hash_type: Optional[str],
+    mode: str,
+    project_id: Optional[int],
+    row_count: int,
+) -> Dict[str, Any]:
+    payload = {
+        "file": str(path),
+        "hash_type": hash_type,
+        "mode": mode,
+        "project_id": project_id,
+        "row_count": int(row_count),
+    }
+    job_path = _write_startup_job("tags_import", payload)
+    logger.info(
+        "Tags import deferred to startup: file=%s rows=%s job=%s",
+        path,
+        row_count,
+        Path(job_path).name,
+    )
+    return {"status": "deferred", "job_path": job_path, "rows": int(row_count)}
+
+
 def _run_startup_jobs(settings: Dict[str, str]) -> Dict[str, int]:
     if not STARTUP_JOBS_DIR.exists():
         return {"total": 0, "processed": 0, "failed": 0, "skipped": 0}
@@ -271,9 +316,28 @@ def _run_startup_jobs(settings: Dict[str, str]) -> Dict[str, int]:
                 data = json.load(fh)
             kind = str(data.get("kind") or "").strip()
             logger.info("Startup jobs: %s/%s kind=%s file=%s", idx, total, kind or "unknown", path.name)
-            skipped += 1
-            dest = processed_root / path.name
-            path.replace(dest)
+            if kind == "tags_import":
+                payload = data.get("payload") or {}
+                file_path = Path(str(payload.get("file") or "").strip())
+                if not file_path.exists():
+                    raise RuntimeError(f"tags_import startup file missing: {file_path}")
+                task_id = _create_task_record("tags_import", message=json.dumps(payload))
+                _task_update(task_id, status="running", started_at=now_iso())
+                try:
+                    _run_tags_import_task(task_id)
+                except Exception as exc:
+                    _task_update(task_id, status="error", message=str(exc), finished_at=now_iso())
+                    raise
+                processed += 1
+                dest = processed_root / path.name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                path.replace(dest)
+                logger.info("Startup tags import processed file=%s task_id=%s", path.name, task_id)
+            else:
+                skipped += 1
+                dest = processed_root / path.name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                path.replace(dest)
         except Exception as exc:
             failed += 1
             logger.warning("Startup jobs failed file=%s err=%s", path, exc)
@@ -1691,25 +1755,32 @@ def _task_finish_done_or_canceled(task_id: int) -> None:
         _task_update(task_id, status="done", finished_at=now_iso())
 
 
-def _enqueue_task(kind: str, target_id: Optional[int] = None, message: Optional[str] = None) -> int:
+def _create_task_record(kind: str, target_id: Optional[int] = None, message: Optional[str] = None) -> int:
     now = now_iso()
     task_id_box: Dict[str, int] = {"id": 0}
 
     def _write() -> None:
         conn = get_db()
-        conn.execute(
-            "INSERT INTO tasks (kind, status, target_id, progress_json, message, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (kind, "queued", target_id, json.dumps({"status": "queued"}), message, now),
-        )
-        row = conn.execute("SELECT last_insert_rowid() as id").fetchone()
-        task_id_box["id"] = int(row["id"]) if row and row["id"] is not None else 0
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute(
+                "INSERT INTO tasks (kind, status, target_id, progress_json, message, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (kind, "queued", target_id, json.dumps({"status": "queued"}), message, now),
+            )
+            row = conn.execute("SELECT last_insert_rowid() as id").fetchone()
+            task_id_box["id"] = int(row["id"]) if row and row["id"] is not None else 0
+            conn.commit()
+        finally:
+            conn.close()
 
     _db_retry(_write)
     task_id = task_id_box["id"]
     if task_id <= 0:
-        raise RuntimeError("Failed to enqueue task")
+        raise RuntimeError("Failed to create task record")
+    return task_id
+
+
+def _enqueue_task(kind: str, target_id: Optional[int] = None, message: Optional[str] = None) -> int:
+    task_id = _create_task_record(kind, target_id=target_id, message=message)
     TASK_QUEUE.put(task_id)
     return int(task_id)
 
@@ -2069,6 +2140,7 @@ class SettingsUpdate(BaseModel):
     sidebar_width: Optional[int] = None
     project_path_blacklist: Optional[str] = None
     purge_assets_on_startup: Optional[bool] = None
+    defer_large_tag_imports_on_startup: Optional[bool] = None
     use_temperature: Optional[bool] = None
     temperature: Optional[float] = None
 
@@ -7203,6 +7275,7 @@ def update_settings(payload: SettingsUpdate) -> Dict[str, str]:
             "default_full_project_copy",
             "setcard_single_image_only",
             "export_skip_preview_images",
+            "defer_large_tag_imports_on_startup",
         }:
             if isinstance(value, bool):
                 value = "true" if value else "false"
@@ -7542,6 +7615,11 @@ def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, A
         masked["default_full_project_copy"] = "true" if raw in {"1", "true", "yes", "on"} else "false"
     else:
         masked["default_full_project_copy"] = "false"
+    if "defer_large_tag_imports_on_startup" in masked:
+        raw = str(masked.get("defer_large_tag_imports_on_startup") or "").strip().lower()
+        masked["defer_large_tag_imports_on_startup"] = "true" if raw in {"1", "true", "yes", "on"} else "false"
+    else:
+        masked["defer_large_tag_imports_on_startup"] = "true"
     if "tag_display_limit" in masked:
         raw = str(masked.get("tag_display_limit") or "").strip()
         if not raw.isdigit():
@@ -8751,13 +8829,21 @@ def import_tags(
         except Exception:
             raise HTTPException(status_code=400, detail="hash_type must be blake3 or sha256")
 
-    logger.info("Tags import queued: filename=%s", file.filename)
+    conn = get_db()
+    settings = get_settings(conn)
+    conn.close()
+
     ts = int(time.time() * 1000)
     safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", file.filename)
     temp_path = UPLOADS_DIR / f"tags_import_{ts}_{safe_name}"
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     with temp_path.open("wb") as dest:
         shutil.copyfileobj(file.file, dest)
+    row_count = _count_csv_data_rows(temp_path)
+    if row_count > 1000 and _defer_large_tag_imports_on_startup_enabled(settings):
+        return _queue_large_tag_import_for_startup(temp_path, hash_type, mode, project_id, row_count)
+
+    logger.info("Tags import queued: filename=%s rows=%s", file.filename, row_count)
     task_payload = json.dumps(
         {
             "file": str(temp_path),
