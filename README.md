@@ -32,6 +32,11 @@ Project creation recommendation:
   - `aeb /Game/byHans1/MyPack/SM_Crate.SM_Crate`
 - This keeps `project_root` / `source_folder` mapping consistent and avoids duplicate/wrong project roots.
 
+Delivery standard:
+
+- If Python is available, keep the repo in a fully runnable state and include the rebuilt runtime artifacts needed for direct execution.
+- Avoid shipping source changes without the matching runnable package when a rebuild is part of the change.
+
 Project path blacklist:
 
 - Setting: `project_path_blacklist` in UnrealAssetExplorer settings.
