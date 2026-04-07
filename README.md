@@ -174,6 +174,9 @@ Global row:
 
 - `View Assets`: open the asset list filtered to the selected project.
 - `Edit`: edit project name, source path/folder, and metadata.
+- `Source mode`:
+  - `External` keeps the original pack path as the source reference.
+  - `Internal` prefers the local project directory for open/export decisions.
 - `Sync`: reimport/sync files from the configured source into local project storage.
 - `Open Project Folder`: open local project folder on disk.
 - `Open Source Folder`: open configured source folder on disk.
