@@ -22,6 +22,11 @@ export async function fetchProjects(params = {}) {
   return res.json();
 }
 
+export async function fetchProjectHashes(projectId) {
+  const res = await fetch(`${API_BASE}/projects/${projectId}/hashes`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
 
 export async function generateProjectSetcard(projectId, force = false) {
   const url = new URL(`${API_BASE}/projects/${projectId}/setcard`);
