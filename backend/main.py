@@ -5643,7 +5643,9 @@ def _get_cached_source_size(
     return int(size)
 
 
-def _project_blake3_hashes(conn: sqlite3.Connection, project_id: int) -> List[str]:
+def _project_blake3_hashes(conn: sqlite3.Connection, project_id: int, allow_hashes: bool = True) -> List[str]:
+    if not allow_hashes:
+        return []
     rows = fetch_all(
         conn,
         """
@@ -6339,6 +6341,10 @@ def create_project(payload: ProjectCreate) -> Dict[str, Any]:
 @app.get("/projects")
 def list_projects(include_sizes: bool = False, include_asset_hashes: bool = False) -> List[Dict[str, Any]]:
     conn = get_db()
+    allow_asset_hashes = False
+    if include_asset_hashes:
+        settings = get_settings(conn)
+        allow_asset_hashes = _bool_from_setting(settings.get("skip_export_if_on_server"))
     rows = fetch_all(conn, "SELECT * FROM projects ORDER BY created_at DESC")
     output = []
     for row in rows:
@@ -6361,7 +6367,7 @@ def list_projects(include_sizes: bool = False, include_asset_hashes: bool = Fals
         else:
             folder_size_bytes = int(row.get("size_bytes") or 0)
             source_size_bytes = int(row.get("source_size_bytes") or 0)
-        blake3_hashes = _project_blake3_hashes(conn, row["id"]) if include_asset_hashes else None
+        blake3_hashes = _project_blake3_hashes(conn, row["id"], allow_asset_hashes) if include_asset_hashes else None
         output.append(
             {
                 "id": row["id"],
@@ -6764,6 +6770,10 @@ def project_stats(
 @app.get("/projects/{project_id}")
 def get_project(project_id: int, include_asset_hashes: bool = False) -> Dict[str, Any]:
     conn = get_db()
+    allow_asset_hashes = False
+    if include_asset_hashes:
+        settings = get_settings(conn)
+        allow_asset_hashes = _bool_from_setting(settings.get("skip_export_if_on_server"))
     row = fetch_one(conn, "SELECT * FROM projects WHERE id = ?", (project_id,))
     if not row:
         conn.close()
@@ -6782,7 +6792,7 @@ def get_project(project_id: int, include_asset_hashes: bool = False) -> Dict[str
             (normalized_folder_path, screenshot_path, row["id"]),
         )
         conn.commit()
-    blake3_hashes = _project_blake3_hashes(conn, row["id"]) if include_asset_hashes else None
+    blake3_hashes = _project_blake3_hashes(conn, row["id"], allow_asset_hashes) if include_asset_hashes else None
     conn.close()
     folder_size_bytes = _dir_size_bytes(normalized_folder_path)
     source_size_bytes = _dir_size_bytes(str(_resolve_source_content_path(row) or ""))
@@ -6818,7 +6828,8 @@ def get_project_hashes(project_id: int) -> Dict[str, Any]:
     if not row:
         conn.close()
         raise HTTPException(status_code=404, detail="Project not found")
-    hashes = _project_blake3_hashes(conn, project_id)
+    allow_hashes = _bool_from_setting(get_settings(conn).get("skip_export_if_on_server"))
+    hashes = _project_blake3_hashes(conn, project_id, allow_hashes)
     conn.close()
     return {"project_id": project_id, "blake3_hashes": hashes, "blake3_hash_count": len(hashes)}
 

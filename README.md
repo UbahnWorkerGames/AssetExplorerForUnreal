@@ -1,14 +1,14 @@
 # AssetExplorerForUnreal
 
 UnrealAssetExplorer is the management tool for Unreal Engine asset packs.
-It combines a FastAPI backend with a React frontend and adds workflows for:
+It combines a FastAPI backend with a React frontend and covers:
 
 - project and asset indexing
 - preview images/screenshots
 - metadata and tag management
 - LLM/OpenAI-assisted tag generation and translation
-- import/export/sync flows for UE asset packs
-- HumbleBundle/Fab listing checks against projects already in the database
+- import/export/sync for UE asset packs
+- HumbleBundle/Fab checks against projects already in the database
 
 ## Unreal Integration
 
@@ -28,15 +28,21 @@ Important:
 
 Project model:
 
-- Projects now have an explicit source mode in the UI:
-  - `External` keeps the source tied to the original pack path.
+- Projects have a source mode in the UI:
+  - `External` keeps the original pack path as the source reference.
   - `Internal` prefers the local project folder for open/export decisions.
-- `full_project_copy` controls whether the whole project is copied or only the selected source folder.
-- Prefer creating/syncing projects via Unreal export/import flow (AEB bridge or Epic/Fab import script), not by manual database edits.
+- `full_project_copy` controls whether the whole project or only the selected source folder is copied.
+- Prefer creating/syncing projects via the Unreal export/import flow. Avoid manual database edits.
 - Typical export calls are:
   - `aeb /Game/`
   - `aeb /Game/byHans1/MyPack/SM_Crate.SM_Crate`
-- This keeps `project_root` / `source_folder` mapping consistent and avoids duplicate or wrong project roots.
+- This keeps `project_root` / `source_folder` mapping consistent and avoids duplicate or wrong roots.
+
+Bridge hash checks:
+
+- When `skip_export_if_on_server` is disabled, the project `blake3_hashes` list is intentionally empty.
+- An empty hash list tells the bridge to skip the duplicate check and export everything.
+- The current `frontend/dist` build was verified against this flow, and Opus 4.6 helped find and fix additional bridge bugs during that pass.
 
 Delivery standard:
 
@@ -53,9 +59,9 @@ Project path blacklist:
 
 Tag import startup deferral:
 
-- Large tag CSV imports can be deferred to startup instead of running immediately.
+- Large tag CSV imports can be deferred to startup.
 - The toggle lives in Settings as `Defer large tag imports to startup`.
-- Imports over 1000 data rows are queued into `startup_jobs` and processed on the next backend restart.
+- Imports over 1000 data rows are queued into `startup_jobs` and processed on the next restart.
 - The UI shows a clear deferred-state message instead of a generic task toast.
 
 ## Tech Stack
@@ -154,51 +160,51 @@ Screenshots (from `Images/`):
 
 UI Extras:
 
-- `HumbleBundle Check`: paste a Fab JSON object or raw page HTML and compare the listings against your existing projects.
-- Owned items are shown with matching projects; missing items stay visible for manual follow-up.
-- The Fab listing is opened from a compact button instead of a long URL.
+- `HumbleBundle Check`: paste Fab JSON or raw page HTML and compare it with your projects.
+- Owned items show matching projects; missing items stay visible.
+- The Fab listing opens from a compact button instead of a long URL.
 
 ![HumbleBundle Check](Images/s6.png)
 
 Short guide:
 
-1. Paste the raw Fab page HTML or the JSON object into `HumbleBundle Check`.
+1. Paste the raw Fab page HTML or JSON object into `HumbleBundle Check`.
 2. Click `Analyze`.
 3. Read the summary counts for `Found`, `Owned`, `Missing`, and `Linked projects`.
 4. Use the `Fab` button on each card to open the listing.
-5. Green cards are already linked to a project, red cards are not.
+5. Green cards are linked to a project, red cards are not.
 
 ## Project Actions (What Each Button Does)
 
 Global row:
 
-- `View Assets`: open the asset list filtered to the selected project.
+- `View Assets`: open the asset list for the selected project.
 - `Edit`: edit project name, source path/folder, and metadata.
 - `Source mode`:
   - `External` keeps the original pack path as the source reference.
   - `Internal` prefers the local project directory for open/export decisions.
-- `Sync`: reimport/sync files from the configured source into local project storage.
+- `Sync`: reimport files from the configured source into local project storage.
 - `Open Project Folder`: open local project folder on disk.
 - `Open Source Folder`: open configured source folder on disk.
 - `Setcard`: generate or refresh `setcard.png` from project preview images.
-- `Re-export via UE Cmd`: run UnrealEditor-Cmd export flow, then reimport/sync.
+- `Re-export via UE Cmd`: run UnrealEditor-Cmd export flow, then reimport.
 
 LLM row (provider-dependent):
 
-- `Name -> tags`: uses LLM to derive tags from asset names for all assets in the project (appends to tags).
+- `Name -> tags`: uses LLM to derive tags from asset names for all assets in the project.
 - `Name -> tags missing`: same, but only where `name_translate_tags_done_at` is missing.
 - `Translate tags`: LLM translation of existing tags for all assets in the project.
 - `Translate tags missing`: same, but only where `translate_tags_done_at` is missing.
 
 Danger row:
 
-- `Delete assets`: delete project assets from DB (files on disk stay untouched).
-- `Delete project`: delete project and its DB asset records (files on disk stay untouched).
+- `Delete assets`: delete project assets from DB; files on disk stay untouched.
+- `Delete project`: delete the project and its DB asset records; files on disk stay untouched.
 
 ## Notes
 
 - SQLite is used by default; long-running write tasks can temporarily lock DB operations.
-- Startup may process archived batch outputs before all write endpoints are available.
+- Startup may replay archived batch outputs before write endpoints are available.
 - API health endpoint: `GET /health`
 
 ## License
